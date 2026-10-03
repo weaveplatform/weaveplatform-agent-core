@@ -135,6 +135,6 @@ already records `v0.1.0`–`v0.8.1` for this module path, so a lower version cou
 published. Remove `release-as` once `v0.9.0` is out.
 
 Core releases no modules and no SDK. Each module is released and published from
-`weaveplatform-agent-modules`, and promoted through `weaveplatform-channels`.
+`weaveplatform-agent-modules`, and promoted through `weaveplatform-release-channels`.
 
 `make snapshot` runs the same goreleaser configuration locally, unsigned, into `dist/`.

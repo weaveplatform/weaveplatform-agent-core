@@ -52,4 +52,4 @@ own copy):
 - **channel manifest** — the signed document mapping a channel to a known-good set of core
   and module versions and the protocol they assume; rolling for SaaS, pinned for
   self-hosted. Verified by `internal/manifestverify`; minted and signed by
-  `cmd/weavemanifest`; the documents and public keys live in the channels repository.
+  `cmd/weavemanifest`; the documents and public keys live in weaveplatform-release-channels.

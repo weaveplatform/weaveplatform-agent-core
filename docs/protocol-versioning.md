@@ -63,7 +63,7 @@ they keep running in the window.
 - `schema/module-manifest.schema.json` and `schema/channel-manifest.schema.json` carry the
   protocol as an integer. A new value needs no schema change; a change to the manifest shape
   is its own decision and its own schema version.
-- `weaveplatform-channels` records, per channel, the protocol window the core release
+- `weaveplatform-release-channels` records, per channel, the protocol window the core release
   assumes and the protocol each module speaks. Promote the new core release there first, and
   modules on N+1 only into channels whose core advertises N+1. A module outside a core's
   window is refused at handshake (exit 78) and never restarted, so a mis-promotion shows up as

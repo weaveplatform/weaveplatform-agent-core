@@ -61,7 +61,7 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
 
   # The channel-manifest signing tool. Ships with core because it IS core's
-  # verifier with a keygen/sign front end; the channels repository runs it
+  # verifier with a keygen/sign front end; weaveplatform-release-channels runs it
   # from this release rather than carrying a copy.
   - id: weavemanifest
     main: ./cmd/weavemanifest

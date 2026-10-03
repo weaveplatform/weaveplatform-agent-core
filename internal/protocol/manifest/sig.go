@@ -43,15 +43,15 @@ var (
 // PublicKey is a stored public key (<name>.pub).
 type PublicKey struct {
 	Schema int    `json:"schema"`
-	KeyID  string `json:"key_id"` //nolint:tagliatelle // signature file format shared with weavemanifest and the channels repository
+	KeyID  string `json:"key_id"` //nolint:tagliatelle // signature file format shared with weavemanifest and weaveplatform-release-channels
 	// Ed25519 public key, base64.
-	PublicKey string `json:"public_key"` //nolint:tagliatelle // signature file format shared with weavemanifest and the channels repository
+	PublicKey string `json:"public_key"` //nolint:tagliatelle // signature file format shared with weavemanifest and weaveplatform-release-channels
 }
 
 // Signature is a detached signature (<name>.sig).
 type Signature struct {
 	Schema int    `json:"schema"`
-	KeyID  string `json:"key_id"` //nolint:tagliatelle // signature file format shared with weavemanifest and the channels repository
+	KeyID  string `json:"key_id"` //nolint:tagliatelle // signature file format shared with weavemanifest and weaveplatform-release-channels
 	// Ed25519 signature over the signed file's exact bytes, base64.
 	Signature string `json:"signature"`
 }

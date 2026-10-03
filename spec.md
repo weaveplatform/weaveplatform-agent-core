@@ -244,7 +244,7 @@ weaveplatform-agent-modules  the module SDK (sdk/: modulesdk, testkit, its own c
 <product>                    a product repository (guestweave, deviceweave, …) holding that
                              product's wire vocabulary and — when it has one — its host-side
                              tooling
-weaveplatform-channels       the signed registry: channel manifests and the signing keys;
+weaveplatform-release-channels       the signed registry: channel manifests and the signing keys;
                              data, not code
 ```
 

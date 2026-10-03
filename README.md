@@ -24,7 +24,7 @@ Core is to its modules what Terraform core is to providers
 |---|---|
 | `hashicorp/terraform`: the CLI and core; owns the plugin protocol (`docs/plugin-protocol/*.proto`) and keeps a private implementation (`internal/tfplugin5`, `internal/plugin`) | **this repository**: `weave-agent`, `weaveboot`, `weavectl`, `weavemanifest`; owns `proto/` and `schema/`; private implementation under `internal/` |
 | `terraform-plugin-go`, `-framework`, `-testing`, and every provider in its own repository | [`weaveplatform-agent-modules`](https://github.com/weaveplatform/weaveplatform-agent-modules): the module SDK and every `weave-<os>-<capability>` module, each with its own release |
-| The Terraform Registry | [`weaveplatform-channels`](https://github.com/weaveplatform/weaveplatform-channels): signed channel manifests saying which module versions a device may run |
+| The Terraform Registry | [`weaveplatform-release-channels`](https://github.com/weaveplatform/weaveplatform-release-channels): signed channel manifests saying which module versions a device may run |
 
 Core launches modules the same way Terraform launches providers: verify the signature,
 spawn, handshake, then speak gRPC over a local socket for the process lifetime. Core and
@@ -36,7 +36,7 @@ flowchart LR
     proto["<b>proto/ · schema/</b><br/>the protocol, owned by core"] --> core["<b>weaveplatform-agent-core</b><br/>weaveboot · weave-agent · weavectl · weavemanifest<br/>internal/protocol · internal/gen<br/>tags vX.Y.Z"]
     proto -. "the contract" .-> modules["<b>weaveplatform-agent-modules</b><br/>the module SDK<br/>weave-&lt;os&gt;-&lt;capability&gt; modules"]
     modules <-. "the wire: handshake + gRPC" .-> core
-    modules -->|publish + promote| channels["<b>weaveplatform-channels</b><br/>signed channel manifests"]
+    modules -->|publish + promote| channels["<b>weaveplatform-release-channels</b><br/>signed channel manifests"]
     channels -. verified at runtime .-> core
     style core fill:#1f6feb,color:#fff
 ```

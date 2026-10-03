@@ -2,7 +2,7 @@
 // an offline root key endorses named signing keys; signing keys sign channel
 // manifests.
 //
-// It lives in core rather than in the channels repository so that there is
+// It lives in core rather than in weaveplatform-release-channels so that there is
 // exactly one verifier: verify calls internal/manifestverify, the same code
 // core runs before it trusts a fetched manifest. A tool that re-implemented
 // the chain could drift from the agent, and the drift would be a security
