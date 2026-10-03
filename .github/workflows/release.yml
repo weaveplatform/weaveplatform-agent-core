@@ -1,0 +1,74 @@
+name: release
+
+# Builds and attaches the release artifacts when release-please tags a
+# release: the binaries for six platforms, the archives, the weave-agent
+# .deb, and a cosign-signed checksum file.
+#
+# release-please owns the version, the changelog and the GitHub release
+# itself; this only builds the artifacts and appends them. A failure here
+# leaves the release intact rather than half-made, and the run can be
+# repeated without re-tagging. The tag reaches this workflow because
+# release-please pushes it with the org App token, not GITHUB_TOKEN.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  goreleaser:
+    name: '📦 Build and sign release artifacts'
+    # Only vX.Y.Z tags release core. A tag with a path component
+    # (anything/v1.2.3) is never a core release.
+    if: ${{ !contains(github.ref_name, '/') }}
+    runs-on: ubuntu-latest
+    permissions:
+      # Attaching the artifacts to the release.
+      contents: write
+      # Keyless signing: cosign exchanges this token for a short-lived
+      # certificate naming this workflow.
+      id-token: write
+    env:
+      GOWORK: 'off'
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - name: Check Out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # goreleaser derives the version from the tag, which needs the tags
+          # and the history behind them.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # Release builds are production builds: the `dev` build tag turns on the
+      # manifest-root-pub override and insecure enrolment, which must never
+      # ship.
+      - name: Guard against the dev build tag
+        run: |
+          if grep -En '[-]tags[ =]+([^ ]*,)?dev\b' .goreleaser.yaml; then
+            echo "::error::a 'dev' build tag is present in .goreleaser.yaml; release builds must be production"
+            exit 1
+          fi
+          echo "no dev build tag in the release build config"
+
+      - name: Run goreleaser
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

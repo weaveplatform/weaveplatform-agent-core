@@ -1,0 +1,7 @@
+# One module@query per line, applied by deps-refresh.yml after `go get -u`.
+#
+# gRPC 1.84.0 carries GO-2026-6443 (server panic on a request with no
+# :authority or Host header), fixed only on the 1.85 line. Hold the last fixed
+# release until a fixed stable one ships; Dependabot ignores 1.84.x for the
+# same reason.
+google.golang.org/grpc@v1.83.2
