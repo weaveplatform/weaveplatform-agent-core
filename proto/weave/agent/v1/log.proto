@@ -1,0 +1,24 @@
+// LogService is served by core on the per-module host socket. The SDK's
+// slog handler streams records here so module logs land in core's log
+// pipeline attributed and interleaved; stderr remains the fallback before
+// Init and on stream failure.
+
+syntax = "proto3";
+
+package weave.agent.v1;
+
+service LogService {
+  rpc Write(stream LogRecord) returns (LogWriteResponse);
+}
+
+message LogRecord {
+  // slog levels: DEBUG=-4, INFO=0, WARN=4, ERROR=8.
+  int32 level = 1;
+  string message = 2;
+  // Unix milliseconds.
+  int64 time_ms = 3;
+  // Flattened attributes; nested groups join with ".".
+  map<string, string> attrs = 4;
+}
+
+message LogWriteResponse {}

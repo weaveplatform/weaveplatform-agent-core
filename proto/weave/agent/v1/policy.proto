@@ -1,0 +1,34 @@
+// PolicyService is served by core on the per-module host socket. Core reads
+// the device's policy set from a local file, caches the last good one, and
+// delivers each module its document; modules read and watch. What is in a
+// policy document is the module's business — core delivers, it does not
+// interpret.
+
+syntax = "proto3";
+
+package weave.agent.v1;
+
+service PolicyService {
+  rpc Get(PolicyGetRequest) returns (PolicyDocument);
+  // Watch streams the current document immediately, then again on every
+  // change, until the connection closes.
+  rpc Watch(PolicyWatchRequest) returns (stream PolicyDocument);
+}
+
+message PolicyGetRequest {}
+
+message PolicyWatchRequest {}
+
+message PolicyDocument {
+  // Monotonic revision of the document as delivered to this module.
+  uint64 revision = 1;
+  // The module-scoped policy payload, opaque to core.
+  bytes data = 2;
+  // schema_version lets a module evolve its policy shape safely: a module
+  // rolled back to an older version can tell that a document was authored
+  // for a newer schema. Owned by the module, not interpreted by core.
+  uint32 schema_version = 3;
+  // content_type describes the payload encoding (e.g. "application/json").
+  // Also module-owned; core delivers, it does not parse.
+  string content_type = 4;
+}

@@ -1,0 +1,19 @@
+# The generated protocol, core's private copy under internal/gen. The .proto
+# sources in proto/ are the contract; the module SDK in
+# weaveplatform-agent-modules carries its own generated copy.
+#
+#   buf generate
+version: v2
+clean: true
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/weaveplatform/weaveplatform-agent-core/internal/gen/go
+plugins:
+  - local: protoc-gen-go
+    out: internal/gen/go
+    opt: paths=source_relative
+  - local: protoc-gen-go-grpc
+    out: internal/gen/go
+    opt: paths=source_relative

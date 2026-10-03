@@ -1,0 +1,25 @@
+// WatchdogService is served by core on the per-module host socket. After
+// Start, a module opens Notify and sends a ping every watchdog interval
+// (the sd_notify WATCHDOG shape). Core treats a gap longer than the
+// deadline as a liveness failure and restarts the module — catching a
+// hung-but-alive module that Health polling, which the module answers on a
+// separate goroutine, would miss. The interval core wants is delivered in
+// InitRequest.watchdog_interval_seconds; zero disables the watchdog.
+
+syntax = "proto3";
+
+package weave.agent.v1;
+
+service WatchdogService {
+  rpc Notify(stream WatchdogPing) returns (WatchdogSummary);
+}
+
+message WatchdogPing {
+  // Monotonic per-stream counter, starting at 1. Lets core log gaps.
+  uint64 sequence = 1;
+}
+
+message WatchdogSummary {
+  // How many pings core received on this stream before it closed.
+  uint64 received = 1;
+}

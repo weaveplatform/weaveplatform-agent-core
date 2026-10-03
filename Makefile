@@ -6,44 +6,43 @@ export GOWORK := off
 
 GO ?= go
 GOLANGCI_LINT ?= golangci-lint
+BUF ?= buf
 MODULE := $(shell GOWORK=off $(GO) list -m)
 COVER_DIR := cover
 BIN_DIR := bin
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo devel)
-COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null)
-BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-LDFLAGS := -s -w -X $(MODULE)/internal/buildinfo.version=$(VERSION) -X $(MODULE)/internal/buildinfo.commit=$(COMMIT) -X $(MODULE)/internal/buildinfo.buildDate=$(BUILD_DATE)
+TOOL_DIR := .bin
+GOOSES := linux darwin windows
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -s -w -X $(MODULE)/internal/version.Version=$(VERSION)
 PLATFORMS ?= linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
-UNIT_PKGS = $(shell GOWORK=off $(GO) list ./... | grep -v /test/acceptance)
+
+# The protoc plugins buf.gen.yaml runs, at the versions stamped in the
+# committed internal/gen headers. A newer plugin would fail gen-check on a
+# plugin release rather than on a proto change.
+PROTOC_GEN_GO_VERSION := v1.36.11
+PROTOC_GEN_GO_GRPC_VERSION := v1.6.1
 
 ## help: list targets
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/^## //' | column -t -s ':'
 
-## init: rename the module after creating a repository from the template (make init NAME=<repo>)
-init:
-	@test -n "$(NAME)" || { echo "usage: make init NAME=<repository name>"; exit 1; }
-	@grep -rl --exclude-dir=.git weaveplatform-template . | xargs sed -i.bak 's/weaveplatform-template/$(NAME)/g'
-	@find . -name '*.bak' -not -path './.git/*' -delete
-	$(GO) mod tidy
-	@echo "renamed to github.com/weaveplatform/$(NAME); review README.md and CODEOWNERS"
-
 ## fmt: apply the formatters configured in .golangci.yml
 fmt:
 	$(GOLANGCI_LINT) fmt --config .golangci.yml ./...
 
-## lint: golangci-lint over the whole module
+## lint: golangci-lint as linux, darwin and windows (build tags decide which files exist)
 lint:
-	$(GOLANGCI_LINT) run --config .golangci.yml --new=false --fix=false ./...
+	@set -e; for os in $(GOOSES); do echo "== GOOS=$$os"; \
+		GOOS=$$os $(GOLANGCI_LINT) run --config .golangci.yml --new=false --fix=false ./...; done
 
-## vet: go vet
+## vet: go vet as linux, darwin and windows
 vet:
-	$(GO) vet ./...
+	@set -e; for os in $(GOOSES); do echo "== GOOS=$$os"; GOOS=$$os $(GO) vet ./...; done
 
 ## test: unit tests (race, shuffle); coverage to cover/unit
 test:
 	@rm -rf $(COVER_DIR)/unit && mkdir -p $(COVER_DIR)/unit
-	$(GO) test -race -shuffle=on -count=1 -cover -coverpkg=$(MODULE)/... $(UNIT_PKGS) -args -test.gocoverdir=$(CURDIR)/$(COVER_DIR)/unit
+	$(GO) test -race -shuffle=on -count=1 -cover -coverpkg=$(MODULE)/... ./... -args -test.gocoverdir=$(CURDIR)/$(COVER_DIR)/unit
 
 ## cover: merge every cover/* directory and enforce .testcoverage.yml (>=95% total, >=90% per package)
 cover:
@@ -55,9 +54,10 @@ cover:
 	$(GO) tool covdata percent -i=$(COVER_DIR)/.merged
 	$(GO) tool go-test-coverage --config=.testcoverage.yml
 
-## vuln: govulncheck (version pinned in go.mod's tool block, kept current with everything else)
+## vuln: govulncheck as linux, darwin and windows (the tool is built for this machine first)
 vuln:
-	$(GO) tool govulncheck ./...
+	@mkdir -p $(TOOL_DIR) && $(GO) build -o $(TOOL_DIR)/govulncheck golang.org/x/vuln/cmd/govulncheck
+	@set -e; for os in $(GOOSES); do echo "== GOOS=$$os"; GOOS=$$os $(TOOL_DIR)/govulncheck ./...; done
 
 ## build: cross-compile every cmd/* binary for each release platform into bin/ (CGO disabled)
 build:
@@ -72,7 +72,51 @@ build:
 		done; \
 	done
 
-## gate: everything CI runs, in order
-gate: vet lint test cover vuln build
+## tidy-check: go mod tidy changes nothing
+tidy-check:
+	$(GO) mod tidy
+	git diff --exit-code go.mod go.sum
 
-.PHONY: help init fmt lint vet test cover vuln build gate
+## protoc-plugins: install the pinned protoc plugins buf.gen.yaml runs
+protoc-plugins:
+	$(GO) install google.golang.org/protobuf/cmd/protoc-gen-go@$(PROTOC_GEN_GO_VERSION)
+	$(GO) install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$(PROTOC_GEN_GO_GRPC_VERSION)
+
+## buf-lint: lint proto/
+buf-lint:
+	$(BUF) lint
+
+## gen: regenerate internal/gen from proto/
+gen:
+	$(BUF) generate
+
+## gen-check: regenerate and fail if internal/gen differs from what is committed
+gen-check: gen
+	@if [ -n "$$(git status --porcelain -- internal/gen)" ]; then \
+		git status --porcelain -- internal/gen; \
+		echo "internal/gen differs from proto/: run 'make gen' and commit"; exit 1; fi
+
+## core-independent: fail on any dependency on weaveplatform-agent-modules
+core-independent:
+	@set -e; forbidden='^github\.com/weaveplatform/weaveplatform-agent-modules([/ ]|$$)'; fail=0; \
+	for os in $(GOOSES); do \
+		if GOOS=$$os $(GO) list -deps -test ./... | grep -E "$$forbidden"; then \
+			echo "GOOS=$$os: core imports weaveplatform-agent-modules"; fail=1; fi; \
+	done; \
+	if $(GO) list -m all | grep -E "$$forbidden"; then echo "go.mod requires weaveplatform-agent-modules"; fail=1; fi; \
+	[ $$fail -eq 0 ] && echo "core depends on nothing in weaveplatform-agent-modules"
+
+## fuzz: fuzz the handshake and manifest parsers (FUZZTIME, default 30s each)
+FUZZTIME ?= 30s
+fuzz:
+	$(GO) test ./internal/protocol/handshake/ -run '^$$' -fuzz '^FuzzParse$$' -fuzztime $(FUZZTIME)
+	$(GO) test ./internal/protocol/manifest/ -run '^$$' -fuzz '^FuzzManifest$$' -fuzztime $(FUZZTIME)
+
+## snapshot: goreleaser snapshot build (binaries, archives and the deb; unsigned)
+snapshot:
+	goreleaser release --snapshot --clean --skip=sign,publish
+
+## gate: everything CI runs, in order
+gate: vet lint test cover vuln build tidy-check buf-lint gen-check core-independent
+
+.PHONY: help fmt lint vet test cover vuln build tidy-check protoc-plugins buf-lint gen gen-check core-independent fuzz snapshot gate

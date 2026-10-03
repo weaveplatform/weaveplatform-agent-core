@@ -1,0 +1,52 @@
+[Unit]
+Description=Weave platform agent
+Documentation=https://github.com/weaveplatform/weaveplatform-agent-core
+
+# Deliberately not After=network-online.target. The agent is the thing that has
+# to be able to repair a guest whose networking is broken, so an agent that only
+# starts once networking works is useless exactly when it is needed. Core needs
+# no network: its one peer is the host channel (virtio-serial, vsock).
+After=local-fs.target
+
+[Service]
+Type=simple
+
+# systemd supervises weaveboot; weaveboot supervises core; core supervises
+# modules. Do not point this at weave-agent directly — the in-place core replace
+# (stage, health-gate, roll back) is weaveboot's job, and a unit that owns core
+# instead takes that away.
+#
+# --modules-dir sends core to the package-owned module tree under /usr rather
+# than the default beside its state. Module packages install there.
+ExecStart=/usr/lib/weave/weaveboot -- --modules-dir /usr/lib/weave/modules
+
+# Per-image settings without editing the unit: an image or cloud-init seed
+# writes WEAVE_* variables here (WEAVE_CHANNEL=vsock:2010 on a Hyper-V guest,
+# for one). weaveboot passes its environment through to core unchanged. The
+# leading '-' makes the file optional; the package does not ship one.
+EnvironmentFile=-/etc/default/weave-agent
+
+Restart=always
+RestartSec=2
+
+# SIGTERM to weaveboot only, not to every process in the cgroup. Core runs its
+# own module shutdown — stop each module, drain it, close the store — and the
+# default KillMode=control-group would signal the modules directly at the same
+# moment, so core would find their sockets already gone and report a failed
+# shutdown for what is really a race with systemd. Anything still alive after
+# TimeoutStopSec is SIGKILLed, so nothing is left behind either way.
+KillMode=mixed
+
+# weaveboot forwards SIGTERM to core and gives it 15s to drain modules and close
+# the store before killing it. Anything under that turns an orderly shutdown into
+# a SIGKILL and leaves the store to recover on next boot.
+TimeoutStopSec=30
+
+# No sandboxing directives here on purpose. The exec capability's whole job
+# (weave-linux-exec) is to execute what the host asks for inside this guest, so ProtectSystem,
+# PrivateDevices and friends would break the feature rather than harden it — and
+# they would break it selectively, at the moment an operator most needs it to
+# work. The isolation boundary for this agent is the VM.
+
+[Install]
+WantedBy=multi-user.target

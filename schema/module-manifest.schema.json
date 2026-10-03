@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/weaveplatform/weaveplatform-agent-core/schema/module-manifest.schema.json",
+  "title": "Weave module manifest",
+  "description": "Declared by every module: authored as module.manifest.json in the module's source directory, embedded in the module binary for handshake cross-checking, and published as a signed sidecar whose distribution subset is carried in the channel manifest.",
+  "type": "object",
+  "required": ["schema", "id", "version", "protocol", "zone", "privilege", "session", "platforms"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": 1 },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "Stable module identifier, e.g. \"weave-linux-presence\"."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?$",
+      "description": "The module's product semver."
+    },
+    "protocol": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The single protocol integer this module speaks."
+    },
+    "zone": {
+      "enum": ["A", "B", "C"],
+      "description": "Build zone: A = static CGO_ENABLED=0, B = UI-runtime-coupled pure Go, C = cgo/entitled."
+    },
+    "privilege": {
+      "enum": ["system", "service", "user"],
+      "description": "Privilege the supervisor grants at spawn. Not every module is root. system: core's own identity. service: the unprivileged service account (a restricted token on Windows). user: the console user — only with session per-user-console, which in turn requires it."
+    },
+    "session": {
+      "enum": ["system", "per-user-console", "per-user-all"],
+      "description": "Where the process lives. system: core's child in core's own session. per-user-console: core's child inside the session of the user at the physical console (the macOS GUI session, the Linux logind seat0 session, the Windows active console session), running as that user; started when someone logs in, stopped when they leave, moved when the console changes hands. per-user-all is reserved: core refuses it."
+    },
+    "platforms": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["os", "arch"],
+        "additionalProperties": false,
+        "properties": {
+          "os": { "enum": ["darwin", "windows", "linux"] },
+          "arch": { "enum": ["arm64", "amd64"] }
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9.-]*$" },
+      "description": "Capability names the module requires; core gates launch on these."
+    },
+    "address": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$",
+      "description": "Name the module answers to on the hypervisor channel when it differs from id, e.g. weave.exec shared by the per-OS builds of one capability. Core refuses two installed modules with the same address. Defaults to id."
+    },
+    "subscribes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Event-bus topic patterns this module may subscribe to (exact or \"<prefix>.*\"). Core enforces this allow-list at Subscribe; empty means the module subscribes to nothing."
+    },
+    "signing": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "apple_team_id": { "type": "string" },
+        "authenticode_subject": { "type": "string" }
+      },
+      "description": "Identity core pins when verifying the binary before exec."
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["os", "arch", "digest", "size"],
+        "additionalProperties": false,
+        "properties": {
+          "os": { "enum": ["darwin", "windows", "linux"] },
+          "arch": { "enum": ["arm64", "amd64"] },
+          "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+          "size": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "description": "Stamped by CI at publish; absent in the authored source file."
+    }
+  }
+}

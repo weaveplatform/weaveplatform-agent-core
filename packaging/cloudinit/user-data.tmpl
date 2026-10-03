@@ -1,0 +1,82 @@
+#cloud-config
+# Install the weave agent into a guest with nobody touching it.
+#
+# The image is the unit of trust: the agent arrives from a signed repository at
+# first boot, not pushed over SSH afterwards. An agent whose install depends on
+# guest networking cannot bootstrap a guest that has none, and cannot be trusted
+# to repair networking. Core runs as a system service, which a per-user session
+# could not provide anyway.
+#
+# Only weave-agent comes from this repository. Modules arrive from the channel,
+# the way a product guest gets them.
+#
+# make-seed.sh renders the repository URL, the archive key and the channel key
+# into this file's placeholders.
+
+write_files:
+  # The archive key, and the source that names it. Both are written here rather
+  # than through cloud-init's `apt:` module because that module's $KEY_FILE
+  # substitution varies by cloud-init version, and a guest that silently trusted
+  # the wrong keyring would still install — which is the one outcome this must
+  # not have. write_files runs in the init stage, before anything below.
+  - path: /etc/apt/keyrings/weave.asc
+    permissions: "0644"
+    owner: root:root
+    content: |
+@@KEY@@
+
+  - path: /etc/apt/sources.list.d/weave.list
+    permissions: "0644"
+    owner: root:root
+    content: |
+      deb [signed-by=/etc/apt/keyrings/weave.asc] @@REPO_URL@@ ./
+
+  # The public half of this VM's channel keypair. The host holds the private half
+  # in the VM's directory and signs a nonce with it; without this file core
+  # authenticates nobody and answers nothing but hello, which is the correct
+  # behaviour for an unprovisioned image — an agent that anyone reaching the pipe
+  # can drive is not a boundary.
+  #
+  # Delivered by the seed here because this is a bring-up. In a built image it
+  # belongs at image-build time, alongside the agent itself, for the same reason:
+  # the image is the unit of trust.
+  - path: /etc/weave/channel.pub
+    permissions: "0644"
+    owner: root:root
+    content: |
+@@CHANNELKEY@@
+
+runcmd:
+  # Update from the weave list ONLY. A plain `apt-get update` would also reach
+  # deb.debian.org, so an install that should depend on one HTTP server on the
+  # host would fail whenever the guest has no route to the internet — turning a
+  # test of the package into a test of the guest's networking.
+  - [sh, -c, "apt-get update -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/weave.list -o Dir::Etc::sourceparts=/dev/null -o APT::Get::List-Cleanup=0"]
+  # --reinstall, and the reason matters more than the flag. A snapshot build
+  # carries the same version string however many times its binaries change, so a
+  # guest that already has "0.9.1~snapshot" installed sees a repository offering
+  # "0.9.1~snapshot" and correctly concludes there is nothing to do. The boot then
+  # runs the previous binaries while every log line says the install succeeded —
+  # an hour lost to debugging code that is not the code running. Released
+  # versions differ every build and would not need this.
+  - [sh, -c, "apt-get install -y --reinstall weave-agent"]
+  - [systemctl, enable, --now, weave-agent]
+
+  # Everything below is evidence: the gate stated in the guest's own words rather
+  # than inferred from outside — the unit is active, core started, and the
+  # channel device the host publishes is present under the name core probes for.
+  #
+  # It goes to stdout, NOT to /dev/console. cloud-init captures a runcmd's stdout
+  # into /var/log/cloud-init-output.log, which survives the boot; /dev/console on
+  # a Debian arm64 cloud image under Virtualization.framework goes nowhere the
+  # host can read, because the image's kernel cmdline names a serial console that
+  # this hypervisor does not provide. Writing evidence there loses it silently.
+  - [sh, -c, "echo '===== WEAVE BRING-UP EVIDENCE ====='"]
+  - [sh, -c, "ls -l /dev/virtio-ports/ 2>&1 || echo 'NO /dev/virtio-ports — the host published no named port, so a module needing the channel will be gated as requirements-unmet'"]
+  - [sh, -c, "systemctl is-active weave-agent 2>&1"]
+  - [sh, -c, "systemctl status weave-agent --no-pager -l 2>&1"]
+  - [sh, -c, "journalctl -u weave-agent -n 40 --no-pager 2>&1"]
+  - [sh, -c, "ip -4 -o addr show scope global 2>&1"]
+  - [sh, -c, "echo '===== END WEAVE BRING-UP EVIDENCE ====='"]
+
+final_message: "weave bring-up seed finished after $UPTIME seconds"

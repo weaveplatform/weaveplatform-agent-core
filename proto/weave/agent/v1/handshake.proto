@@ -1,0 +1,58 @@
+// Protocol v1 handshake vocabulary.
+//
+// The handshake itself is not an RPC: core spawns the module with environment
+// variables (WEAVE_PROTOCOL_MIN/MAX, WEAVE_HANDSHAKE_TOKEN, WEAVE_HOST_ADDR,
+// WEAVE_SOCKET_DIR) and the module answers with exactly one stdout line:
+//
+//   WEAVE|1|<protocol>|<network>|<addr>
+//
+// after which core dials the module's socket and calls ModuleService.Init.
+// The types here are the vocabulary both sides speak from that point on.
+// The capability vocabulary lives here, not in module code, so it versions
+// with the protocol.
+
+syntax = "proto3";
+
+package weave.agent.v1;
+
+// PrivilegeLevel is the privilege a module manifest declares and the
+// supervisor grants at spawn. Not every module is root.
+enum PrivilegeLevel {
+  PRIVILEGE_LEVEL_UNSPECIFIED = 0;
+  // Full privilege: root on POSIX, SYSTEM on Windows.
+  PRIVILEGE_LEVEL_SYSTEM = 1;
+  // A dedicated unprivileged service account.
+  PRIVILEGE_LEVEL_SERVICE = 2;
+  // The interactive user's own context (per-user session placement).
+  PRIVILEGE_LEVEL_USER = 3;
+}
+
+// SessionPlacement declares where the module process must live. A module
+// that touches per-user state (e.g. a clipboard) cannot run in the system
+// session: session 0 on Windows has its own clipboard no interactive user
+// ever sees.
+enum SessionPlacement {
+  SESSION_PLACEMENT_UNSPECIFIED = 0;
+  // The system/daemon session. The default.
+  SESSION_PLACEMENT_SYSTEM = 1;
+  // One instance in the active console user's session.
+  SESSION_PLACEMENT_PER_USER_CONSOLE = 2;
+  // One instance per logged-in user session.
+  SESSION_PLACEMENT_PER_USER_ALL = 3;
+}
+
+// Capability names one probed fact about the host. Core probes once at
+// startup; modules whose requirements are unmet are never launched.
+message Capability {
+  // Dotted, lower-case, e.g. "platform.osinfo", "hypervisor.channel".
+  string name = 1;
+  // Optional detail (e.g. probed version) attached by core's probe.
+  map<string, string> attributes = 2;
+}
+
+// ProtocolRange is what core advertises: the window of protocol integers it
+// accepts. An N-2 window is the default.
+message ProtocolRange {
+  uint32 min = 1;
+  uint32 max = 2;
+}

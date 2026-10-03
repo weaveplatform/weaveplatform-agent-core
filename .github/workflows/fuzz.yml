@@ -1,0 +1,56 @@
+name: fuzz
+
+# A nightly soak of core's own wire parsers, beyond the seed corpus every
+# pull request runs as ordinary tests: the module handshake line and the
+# module manifest are both read from a process core does not trust.
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOWORK: 'off'
+
+jobs:
+  fuzz:
+    name: 'Fuzz ${{ matrix.target.name }}'
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - {name: handshake, pkg: ./internal/protocol/handshake/, func: FuzzParse, corpus: internal/protocol/handshake}
+          - {name: manifest, pkg: ./internal/protocol/manifest/, func: FuzzManifest, corpus: internal/protocol/manifest}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - name: Check Out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Fuzz ${{ matrix.target.func }}
+        env:
+          PKG: ${{ matrix.target.pkg }}
+          FUNC: ${{ matrix.target.func }}
+        run: go test "$PKG" -run '^$' -fuzz "^${FUNC}\$" -fuzztime 5m
+
+      # A failing input lands in testdata/fuzz; commit it as a regression seed.
+      - name: Upload the failing input
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-${{ matrix.target.name }}-corpus
+          path: ${{ matrix.target.corpus }}/testdata/fuzz
+          retention-days: 7

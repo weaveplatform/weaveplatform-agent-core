@@ -11,10 +11,6 @@ permissions:
 jobs:
   release-please:
     name: '🔖 Release Please'
-    # The template does not release itself: repositories created from it copy
-    # CHANGELOG.md and .release-please-manifest.json, and must start clean at
-    # 0.0.0 so their first release is initial-version (0.1.0).
-    if: ${{ github.repository != 'weaveplatform/weaveplatform-template' }}
     runs-on: ubuntu-latest
     steps:
       - name: Harden Runner
@@ -57,6 +53,16 @@ jobs:
       # Manifest mode: release types and pre-1.0 behaviour live in
       # release-please-config.json and .release-please-manifest.json. Setting
       # release-type here would select single-package mode and bypass them.
+      #
+      # One component at the root, tagged plain vX.Y.Z: release.yml,
+      # goreleaser and the cosign identity all expect that shape.
+      #
+      # The first release is 0.9.0, set by "release-as" in
+      # release-please-config.json (JSON has no comments, so the note lives
+      # here). The Go checksum database already records v0.1.0 to v0.8.1 for
+      # this module path, so a lower version could never be published. It is
+      # a one-time setting: remove "release-as" in the PR after 0.9.0 is
+      # released, or every later release PR proposes 0.9.0 again.
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           token: ${{ steps.app-token.outputs.token || secrets.RELEASE_PLEASE_PAT }}

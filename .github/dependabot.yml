@@ -18,10 +18,18 @@ updates:
       prefix: "chore"
       include: "scope"
 
+  # The root module only: test/protocompat/v1 is the protocol-1 fixture and
+  # keeps its pins.
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
       interval: "daily"
+    # grpc 1.84.0 carries GO-2026-6443 (server panic on a request with no
+    # :authority or Host header) and no 1.84 release fixes it; stay on 1.83.2
+    # until a fixed release exists, then drop this and .github/deps-refresh.pins.
+    ignore:
+      - dependency-name: "google.golang.org/grpc"
+        versions: ["1.84.x"]
     groups:
       go-modules:
         patterns: ["*"]

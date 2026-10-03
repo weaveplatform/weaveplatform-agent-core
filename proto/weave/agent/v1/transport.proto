@@ -1,0 +1,50 @@
+// TransportService is served by core on the per-module host socket.
+// Modules never open their own sockets: everything a module sends off the
+// machine, or receives, passes through core's one authenticated channel to
+// the host directly outside it — a hypervisor for a VM, a container runtime
+// for a container. Modules address the peer; core owns the connection.
+
+syntax = "proto3";
+
+package weave.agent.v1;
+
+service TransportService {
+  rpc Send(TransportSendRequest) returns (TransportSendResponse);
+  // Receive streams inbound messages addressed to the calling module.
+  rpc Receive(TransportReceiveRequest) returns (stream TransportMessage);
+}
+
+// Peer names which channel a message travels on.
+enum Peer {
+  // The default peer: routed as PEER_HYPERVISOR.
+  PEER_UNSPECIFIED = 0;
+  // The host channel (virtio-serial, vsock, HvSocket, or a unix socket for a
+  // container). Gated by the "hypervisor.channel" capability; while no host
+  // is connected and authenticated, sends fail or, with queue_offline, wait.
+  PEER_HYPERVISOR = 2;
+  // 1 is reserved: it names a platform service peer core does not have, and
+  // core refuses sends addressed to it.
+  reserved 1;
+  reserved "PEER_GATEWEAVE";
+}
+
+message TransportMessage {
+  Peer peer = 1;
+  // Module-defined message kind, e.g. "heartbeat".
+  string kind = 2;
+  bytes data = 3;
+}
+
+message TransportSendRequest {
+  TransportMessage message = 1;
+  // When true and the host is not connected, core queues and delivers when
+  // one connects and authenticates, instead of failing.
+  bool queue_offline = 2;
+}
+
+message TransportSendResponse {
+  // True when the message was handed to the peer; false when queued.
+  bool delivered = 1;
+}
+
+message TransportReceiveRequest {}

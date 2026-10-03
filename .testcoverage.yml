@@ -1,6 +1,7 @@
 # Coverage gate: >=95% total, >=90% per package, blocking in CI.
 # The profile is produced by `make cover`, which merges every cover/*
-# directory (unit tests on each OS, acceptance runs) with `go tool covdata`.
+# directory (the unit tests on Linux, macOS and Windows) with
+# `go tool covdata`, so a file only one OS builds counts on the OS that runs it.
 profile: cover/coverage.out
 threshold:
   file: 0
@@ -8,5 +9,7 @@ threshold:
   total: 95
 exclude:
   paths:
-    # Binary entry points: thin shims over internal/.
-    - ^cmd/
+    # Generated from proto/ by buf.
+    - ^internal/gen/
+    # The protocol-compatibility fixture: test infrastructure, not core.
+    - ^test/

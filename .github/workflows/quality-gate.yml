@@ -1,11 +1,12 @@
 name: go | Quality gate
 
-# Every pull request passes vet, blocking lint, unit tests on Linux, macOS and
-# Windows, govulncheck, a cross-compile of every cmd/* binary, and the merged
-# coverage gate (>=95% total, >=90% per package). The `gate` job is the
-# single required status check: make it required in branch protection, and
-# add jobs (acceptance against real dependencies in Docker, for example) to
-# its `needs` and to the coverage job as they appear.
+# Every pull request passes, on Linux, macOS and Windows: vet, blocking lint
+# and unit tests with the race detector and coverage. Then govulncheck as each
+# OS, a cross-compile of every cmd/* binary, a tidiness check, the protocol
+# checks (buf lint, breaking changes against the base branch, and generated
+# code that matches proto/), the dependency boundary (core never depends on
+# weaveplatform-agent-modules), and the merged coverage gate (>=95% total,
+# >=90% per package). The `gate` job is the single required status check.
 
 on:
   workflow_dispatch:
@@ -31,6 +32,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        # bash on every OS: PowerShell splits -test.gocoverdir=... at the dot.
+        shell: bash
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -51,7 +56,6 @@ jobs:
         run: go vet ./...
 
       - name: Unit tests (race, shuffle, coverage)
-        shell: bash
         run: make test
 
       - name: Upload unit coverage
@@ -60,11 +64,18 @@ jobs:
           name: cover-unit-${{ matrix.os }}
           path: cover/unit
           include-hidden-files: true
+          if-no-files-found: error
           retention-days: 7
 
   lint:
-    name: 'Lint (blocking)'
-    runs-on: ubuntu-latest
+    name: 'Lint (blocking, ${{ matrix.os }})'
+    # Per OS because build tags decide which files exist: the Windows service,
+    # DPAPI and Authenticode code is only ever linted as Windows.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -85,6 +96,7 @@ jobs:
       # move it without the workflows permission a workflow edit would need.
       - name: Linter version
         id: lintver
+        shell: bash
         run: echo "version=$(tr -d '[:space:]' < .github/golangci-lint-version)" >> "$GITHUB_OUTPUT"
 
       - name: golangci-lint
@@ -112,6 +124,8 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
+      # As linux, darwin and windows: each OS links different files and
+      # different dependencies (go-winio, the Win32 and macOS bindings).
       - name: govulncheck
         run: make vuln
 
@@ -136,6 +150,91 @@ jobs:
 
       - name: Build every cmd/* binary for every release platform (CGO disabled)
         run: make build
+
+      # An untidy go.sum fails the -mod=readonly release build with "missing
+      # go.sum entry". Fail the PR instead.
+      - name: go.mod and go.sum are tidy
+        run: make tidy-check
+
+  protocol:
+    name: 'Protocol (buf lint, breaking, generated code)'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - name: Check Out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Set up buf
+        uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1.6.0
+        with:
+          setup_only: true
+
+      - name: Install the pinned protoc plugins
+        run: make protoc-plugins
+
+      - name: Lint
+        run: make buf-lint
+
+      # proto/ is the published contract: a change that breaks the wire or
+      # JSON encoding of a released protocol needs a new protocol version
+      # (docs/protocol-versioning.md), not an edit. A base branch with no buf
+      # module has nothing to compare against.
+      - name: Breaking changes against the base branch
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          against="https://github.com/${REPO}.git#branch=${BASE_REF}"
+          if buf ls-files "$against" >/dev/null 2>&1; then
+            buf breaking --against "$against"
+          else
+            echo "base branch has no buf module; nothing to compare against"
+          fi
+
+      # status, not diff: a message added to proto/ shows up as an untracked
+      # file, which `git diff` would not see.
+      - name: Generated code matches proto/
+        run: make gen-check
+
+  core-independent:
+    name: 'Core never depends on weaveplatform-agent-modules'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - name: Check Out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+
+      # Core owns the protocol (proto/) and its own implementation of it
+      # (internal/protocol, internal/gen). Modules and their SDK depend on the
+      # wire, never the other way round (docs/decisions/0001). Nothing in
+      # go.mod stops a stray import from adding the requirement, so this does:
+      # the import graph as each OS, tests included, and the module graph.
+      - name: Check
+        run: make core-independent
 
   coverage:
     name: 'Coverage gate (≥95% total, ≥90% per package)'
@@ -169,7 +268,7 @@ jobs:
   gate:
     name: 'Quality gate'
     if: always()
-    needs: [unit, lint, vuln, build, coverage]
+    needs: [unit, lint, vuln, build, protocol, core-independent, coverage]
     runs-on: ubuntu-latest
     steps:
       - name: Every gate job passed

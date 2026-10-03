@@ -1,0 +1,206 @@
+# Release packaging for the agent: weaveboot, weave-agent (core) and
+# weavectl travel together — they install as one unit under the immutable
+# footprint (spec.md §9), so each platform gets one archive with all
+# three binaries.
+#
+# Zone A throughout: pure Go, CGO_ENABLED=0, every target cross-compiled
+# from one runner. This signs the release archives (cosign, keyless);
+# platform code signing of the binaries themselves (codesign/notarize,
+# Authenticode) is the packaging pipeline's job, not this one's.
+version: 2
+
+project_name: weaveplatform-agent
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: weave-agent
+    main: ./cmd/weave-agent
+    binary: weave-agent
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      # internal/version owns the version; everything asks it, so there is
+      # nothing to keep in sync.
+      - -s -w
+      - -X github.com/weaveplatform/weaveplatform-agent-core/internal/version.Version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+  - id: weaveboot
+    main: ./cmd/weaveboot
+    binary: weaveboot
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/weaveplatform/weaveplatform-agent-core/internal/version.Version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+  - id: weavectl
+    main: ./cmd/weavectl
+    binary: weavectl
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/weaveplatform/weaveplatform-agent-core/internal/version.Version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+  # The channel-manifest signing tool. Ships with core because it IS core's
+  # verifier with a keygen/sign front end; the channels repository runs it
+  # from this release rather than carrying a copy.
+  - id: weavemanifest
+    main: ./cmd/weavemanifest
+    binary: weavemanifest
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: weaveplatform-agent
+    ids: [weave-agent, weaveboot, weavectl, weavemanifest]
+    # weaveplatform-agent_0.1.0_darwin_arm64.tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE
+      - spec.md
+      # Windows only: the unattended installer sits beside the binaries,
+      # where it expects them (docs/windows-install.md). The template is
+      # empty for every other platform, which goreleaser logs as "no files
+      # matched" and otherwise ignores, so those archives are unchanged.
+      - src: '{{ if eq .Os "windows" }}packaging/windows/install.ps1{{ end }}'
+        strip_parent: true
+
+# The Debian package. Linux has no exec-time signature construct, so the package
+# manager IS the trust mechanism there: a signed .deb from a GPG-signed repository,
+# with dpkg verifying provenance at install (internal/verify/release_linux.go says
+# the rest). That is why this exists as a package rather than a tarball and an
+# install script.
+nfpms:
+  - id: weave-agent
+    package_name: weave-agent
+    ids: [weave-agent, weaveboot, weavectl, weavemanifest]
+    formats: [deb]
+    file_name_template: "{{ .PackageName }}_{{ .Version }}_{{ .Arch }}"
+    maintainer: Deployment Theory <support@deploymenttheory.com>
+    description: |
+      Weave platform agent.
+      The one supervised, policied, authenticated presence on a machine:
+      weaveboot supervising core, core supervising modules.
+    vendor: Deployment Theory
+    homepage: https://github.com/weaveplatform/weaveplatform-agent-core
+    license: MIT
+    section: admin
+    priority: optional
+
+    # All three binaries land in one directory, not /usr/bin. weaveboot resolves
+    # core as "the binary beside me" when no staged version layout exists
+    # (weaveboot.currentBinary), which is exactly the fresh-install case — so the
+    # two must be siblings. weavectl is reached through the symlink below.
+    bindir: /usr/lib/weave
+
+    contents:
+      - src: packaging/linux/weave-agent.service
+        dst: /lib/systemd/system/weave-agent.service
+        type: config
+      - src: /usr/lib/weave/weavectl
+        dst: /usr/bin/weavectl
+        type: symlink
+      # Created by the package so its ownership and mode are dpkg's statement,
+      # not a guess made at runtime: release_linux.go refuses to exec a module
+      # from a directory anyone but root can write.
+      - dst: /usr/lib/weave/modules
+        type: dir
+        file_info:
+          mode: 0755
+          owner: root
+          group: root
+
+    scripts:
+      postinstall: packaging/linux/postinstall.sh
+      preremove: packaging/linux/preremove.sh
+      postremove: packaging/linux/postremove.sh
+
+    deb:
+      # A `_gpgorigin` signature inside the .deb, when a key is configured. It is
+      # belt-and-braces: what apt actually verifies is the repository's signed
+      # Release file (packaging/apt), because that is what binds a package to a
+      # publisher at fetch time. Left empty, the package is unsigned and the
+      # repository signature carries the trust on its own.
+      signature:
+        key_file: '{{ index .Env "WEAVE_DEB_SIGN_KEY" }}'
+
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+  algorithm: sha256
+
+# Sign the checksum file rather than each archive: verifying the checksums
+# verifies every archive through it. Keyless signing binds the signature to
+# this workflow's identity — no private key to hold or rotate. (Distinct
+# from the channel-manifest Ed25519 chain, which core verifies at runtime.)
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  # release-please owns the changelog and release notes.
+  disable: true
+
+release:
+  # release-please creates the release when its PR merges; this run
+  # attaches the artifacts to it.
+  mode: append
+  footer: |
+    ---
+
+    Binaries are pure Go (Zone A) and require no runtime dependencies. Each
+    archive carries `weaveboot`, `weave-agent` and `weavectl` for one platform;
+    the Windows zips add `install.ps1`, the unattended installer.
+
+    Verify a download against the signed checksum file:
+
+    ```console
+    cosign verify-blob \
+      --bundle weaveplatform-agent_{{ .Version }}_checksums.txt.sigstore.json \
+      --certificate-identity-regexp 'https://github.com/weaveplatform/weaveplatform-agent-core/.*' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      weaveplatform-agent_{{ .Version }}_checksums.txt
+
+    shasum -a 256 -c weaveplatform-agent_{{ .Version }}_checksums.txt --ignore-missing
+    ```
