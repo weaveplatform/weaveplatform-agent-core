@@ -1,0 +1,39 @@
+// EventBusService is served by core on the per-module host socket. Modules
+// never import each other; anything one module wants another to know goes
+// through here. Delivery is at-most-once and unpersisted at protocol 1.
+
+syntax = "proto3";
+
+package weave.agent.v1;
+
+service EventBusService {
+  rpc Publish(PublishRequest) returns (PublishResponse);
+  rpc Subscribe(SubscribeRequest) returns (stream Event);
+}
+
+message Event {
+  // Dotted topic, prefixed with the publishing module's id by core —
+  // subscribers can trust the origin. E.g. "presence.inventory".
+  string topic = 1;
+  bytes data = 2;
+  // Core-stamped publish time, Unix milliseconds.
+  int64 published_at_ms = 3;
+  // sequence is a monotonic per-topic counter stamped by core. Delivery is
+  // still at-most-once, but a gap in the sequence lets a subscriber detect
+  // that it missed events (e.g. across a reconnect) and re-pull state,
+  // rather than silently losing them.
+  uint64 sequence = 4;
+}
+
+message PublishRequest {
+  // Topic without the module prefix; core prepends the caller's id.
+  string topic = 1;
+  bytes data = 2;
+}
+
+message PublishResponse {}
+
+message SubscribeRequest {
+  // Topic patterns to receive, e.g. "presence.*". Empty subscribes to none.
+  repeated string topics = 1;
+}

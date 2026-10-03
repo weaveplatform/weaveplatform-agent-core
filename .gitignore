@@ -1,5 +1,7 @@
-# Binaries
+# Binaries, tools built by make, goreleaser output
 /bin/
+/.bin/
+/dist/
 *.exe
 *.exe~
 *.dll

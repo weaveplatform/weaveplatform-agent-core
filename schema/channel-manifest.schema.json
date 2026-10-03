@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/weaveplatform/weaveplatform-agent-core/schema/channel-manifest.schema.json",
+  "title": "Weave channel manifest",
+  "description": "A signed document mapping a channel to a known-good set of core and module versions, and promoted guest images, and the protocol they assume. SaaS follows a rolling manifest; self-hosted pins one. Same mechanism, different policy. Signature is a detached minisign-style Ed25519 signature beside the file.",
+  "type": "object",
+  "required": ["schema", "channel", "generated_at", "protocol", "core", "modules"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": 1 },
+    "channel": {
+      "type": "string",
+      "description": "Channel name, e.g. \"stable\", or a pinned service version, e.g. \"pinned/1.14.0\"."
+    },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Monotonic counter per channel. Core persists the highest sequence it has accepted and refuses a lower one (anti-rollback)."
+    },
+    "expires": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Freshness bound. Core refuses a manifest past its expiry (freeze attacks); absent means no expiry."
+    },
+    "protocol": {
+      "type": "object",
+      "required": ["min", "max"],
+      "additionalProperties": false,
+      "properties": {
+        "min": { "type": "integer", "minimum": 1 },
+        "max": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "go-bindings-* versions pinned by the current protocol, e.g. {\"go-bindings-macosplatform\": \"v0.18.0\"}."
+    },
+    "core": {
+      "type": "object",
+      "required": ["version", "artifacts"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "type": "string" },
+        "artifacts": { "$ref": "#/$defs/coreArtifacts" }
+      }
+    },
+    "modules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "version", "protocol", "privilege", "session", "artifacts"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "version": { "type": "string" },
+          "protocol": { "type": "integer" },
+          "privilege": { "enum": ["system", "service", "user"] },
+          "session": { "enum": ["system", "per-user-console", "per-user-all"] },
+          "capabilities": { "type": "array", "items": { "type": "string" } },
+          "subscribes": { "type": "array", "items": { "type": "string" } },
+          "signing": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "apple_team_id": { "type": "string" },
+              "authenticode_subject": { "type": "string" }
+            }
+          },
+          "artifacts": { "$ref": "#/$defs/artifacts" }
+        }
+      },
+      "description": "The distribution subset of each module's manifest, so core gates fetch/exec decisions on signed data before it possesses the binary."
+    },
+    "images": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/image" },
+      "description": "Promoted weave guest images (weaveplatform-oci artifact contract v1). Listing an index digest is what admits it: hostweave dispatches only digests a verified channel lists. Core ignores this section."
+    }
+  },
+  "$defs": {
+    "coreArtifacts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/artifacts/items" },
+      "description": "May be empty: a channel can carry only modules or only images."
+    },
+    "image": {
+      "type": "object",
+      "required": ["repository", "tag", "digest"],
+      "additionalProperties": false,
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repository path without the registry host, so one entry admits the image from GHCR, a mirror or an air-gapped layout."
+        },
+        "tag": { "type": "string", "minLength": 1 },
+        "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "platforms": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["os", "arch", "digest"],
+            "additionalProperties": false,
+            "properties": {
+              "os": { "enum": ["darwin", "windows", "linux"] },
+              "arch": { "enum": ["arm64", "amd64"] },
+              "os_version": { "type": "string" },
+              "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+            }
+          }
+        },
+        "signature": {
+          "type": "object",
+          "required": ["provider"],
+          "additionalProperties": false,
+          "description": "The build-time signature consumers should also expect.",
+          "properties": {
+            "provider": { "enum": ["cosign-key", "github-attestation"] },
+            "key_id": { "type": "string" },
+            "issuer": { "type": "string" },
+            "subject_regexp": { "type": "string" }
+          }
+        },
+        "build_date": { "type": "string", "format": "date-time" }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["os", "arch", "url", "digest", "size"],
+        "additionalProperties": false,
+        "properties": {
+          "os": { "enum": ["darwin", "windows", "linux"] },
+          "arch": { "enum": ["arm64", "amd64"] },
+          "url": { "type": "string" },
+          "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+          "size": { "type": "integer", "minimum": 1 }
+        }
+      }
+    }
+  }
+}

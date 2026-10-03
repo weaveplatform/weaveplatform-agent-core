@@ -1,0 +1,46 @@
+// StoreService is served by core on the per-module host socket. The
+// namespace is bound to the authenticated connection, never carried in a
+// request — a module cannot name, let alone read, another module's
+// namespace. Values are encrypted at rest by core.
+
+syntax = "proto3";
+
+package weave.agent.v1;
+
+service StoreService {
+  rpc Get(StoreGetRequest) returns (StoreGetResponse);
+  rpc Put(StorePutRequest) returns (StorePutResponse);
+  rpc Delete(StoreDeleteRequest) returns (StoreDeleteResponse);
+  rpc List(StoreListRequest) returns (StoreListResponse);
+}
+
+message StoreGetRequest {
+  string key = 1;
+}
+
+message StoreGetResponse {
+  bytes value = 1;
+  bool found = 2;
+}
+
+message StorePutRequest {
+  string key = 1;
+  bytes value = 2;
+}
+
+message StorePutResponse {}
+
+message StoreDeleteRequest {
+  string key = 1;
+}
+
+message StoreDeleteResponse {}
+
+message StoreListRequest {
+  // Optional key prefix filter.
+  string prefix = 1;
+}
+
+message StoreListResponse {
+  repeated string keys = 1;
+}

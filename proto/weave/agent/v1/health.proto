@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package weave.agent.v1;
+
+// Health is a module's self-report. Degraded is a first-class state: a
+// module whose backend is temporarily unavailable (no display session yet,
+// device not present) reports Degraded with a reason rather than failing
+// Init or crashing — the supervisor restarts Unhealthy modules, not
+// Degraded ones.
+message Health {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    STATUS_HEALTHY = 1;
+    STATUS_DEGRADED = 2;
+    STATUS_UNHEALTHY = 3;
+  }
+  Status status = 1;
+  string reason = 2;
+  map<string, string> details = 3;
+}

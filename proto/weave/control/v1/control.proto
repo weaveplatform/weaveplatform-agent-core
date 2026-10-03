@@ -1,0 +1,95 @@
+// ControlService is core's control socket: the one endpoint for the CLI
+// (weavectl) and, later, the portal. Access is gated by socket permissions,
+// not credentials — if you can open the socket, you are an operator.
+
+syntax = "proto3";
+
+package weave.control.v1;
+
+import "weave/agent/v1/handshake.proto";
+import "weave/agent/v1/health.proto";
+import "weave/agent/v1/ui.proto";
+
+service ControlService {
+  rpc Status(StatusRequest) returns (StatusResponse);
+  rpc Modules(ModulesRequest) returns (ModulesResponse);
+  // Surfaces returns every module's declared UI surfaces; this is the
+  // portal's read path.
+  rpc Surfaces(SurfacesRequest) returns (SurfacesResponse);
+  rpc Install(InstallRequest) returns (InstallResponse);
+  rpc Rollback(RollbackRequest) returns (RollbackResponse);
+  rpc Logs(LogsRequest) returns (stream LogLine);
+}
+
+message StatusRequest {}
+
+message StatusResponse {
+  string core_version = 1;
+  weave.agent.v1.ProtocolRange protocol = 2;
+  string device_id = 3;
+  // True when device_id is persistent rather than session-scoped.
+  bool enrolled = 4;
+  // Seconds since core started.
+  uint64 uptime_seconds = 5;
+}
+
+message ModulesRequest {}
+
+message ModuleStatus {
+  string id = 1;
+  string version = 2;
+  uint32 protocol = 3;
+  // Supervisor state: "running", "starting", "backoff", "breaker",
+  // "unsupported-protocol", "requirements-unmet", "stopped".
+  string state = 4;
+  weave.agent.v1.Health health = 5;
+  int32 pid = 6;
+  uint32 restarts = 7;
+}
+
+message ModulesResponse {
+  repeated ModuleStatus modules = 1;
+}
+
+message SurfacesRequest {}
+
+message ModuleSurfaces {
+  string module_id = 1;
+  repeated weave.agent.v1.Surface surfaces = 2;
+}
+
+message SurfacesResponse {
+  repeated ModuleSurfaces modules = 1;
+}
+
+message InstallRequest {
+  string module_id = 1;
+  // Version to install; empty means the channel manifest's current.
+  string version = 2;
+  // Local artifact path (dev builds only); empty fetches per the manifest.
+  string local_path = 3;
+}
+
+message InstallResponse {
+  string installed_version = 1;
+}
+
+message RollbackRequest {
+  string module_id = 1;
+}
+
+message RollbackResponse {
+  string rolled_back_to = 1;
+}
+
+message LogsRequest {
+  // Filter to one module; empty streams core and all modules.
+  string module_id = 1;
+  bool follow = 2;
+}
+
+message LogLine {
+  string source = 1;
+  string line = 2;
+  int64 time_ms = 3;
+}

@@ -1,0 +1,70 @@
+// ModuleService is the service every module serves on its own socket.
+// Core is the only client. Call sequence is enforced by the SDK runtime:
+// Init exactly once, then Start; Stop is idempotent; Shutdown ends the
+// process. Health may be called at any time after Init.
+
+syntax = "proto3";
+
+package weave.agent.v1;
+
+import "weave/agent/v1/handshake.proto";
+import "weave/agent/v1/health.proto";
+import "weave/agent/v1/ui.proto";
+
+service ModuleService {
+  rpc Init(InitRequest) returns (InitResponse);
+  rpc Start(StartRequest) returns (StartResponse);
+  rpc Stop(StopRequest) returns (StopResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+}
+
+message InitRequest {
+  // The protocol integer core selected from the module's advertised value.
+  uint32 protocol = 1;
+  // The module id core believes it launched; the module must refuse Init
+  // if this does not match its own identity (tamper tell).
+  string module_id = 2;
+  // The full probed capability set of this host.
+  repeated Capability capabilities = 3;
+  // Opaque module configuration. Core does not know what is in it.
+  bytes config = 4;
+  // The privilege level actually granted at spawn.
+  PrivilegeLevel privilege = 5;
+  // How often core wants the module to send a WatchdogService ping, in
+  // seconds. Zero disables the watchdog (core falls back to Health polling
+  // alone). Additive; a module built before this field simply never pings.
+  uint32 watchdog_interval_seconds = 6;
+}
+
+message InitResponse {
+  // Capabilities the module requires. Core has already gated launch on the
+  // manifest's declaration; this is the runtime confirmation.
+  repeated Capability requires = 1;
+  // UI surfaces the module offers, as data. May be empty.
+  repeated Surface surfaces = 2;
+  // How often core should poll Health. Zero means core's default.
+  uint32 health_interval_seconds = 3;
+}
+
+message StartRequest {}
+
+message StartResponse {}
+
+message StopRequest {
+  // Drain deadline in seconds; the module should finish in-flight work and
+  // return within it.
+  uint32 deadline_seconds = 1;
+}
+
+message StopResponse {}
+
+message HealthRequest {}
+
+message HealthResponse {
+  Health health = 1;
+}
+
+message ShutdownRequest {}
+
+message ShutdownResponse {}

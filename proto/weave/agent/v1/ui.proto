@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package weave.agent.v1;
+
+// Surfaces are UI declared as data. Modules never draw; the portal renders.
+// Core brokers these documents from module to portal without interpreting
+// them. Portal-side semantics are deliberately unspecified at protocol 1 —
+// this message is the seam, not the design.
+message Surface {
+  // Stable identifier, unique within the module, e.g. "status-card".
+  string id = 1;
+  // Human-readable title the portal may display.
+  string title = 2;
+  // Surface kind vocabulary, e.g. "card", "settings", "notification".
+  string kind = 3;
+  // The declarative payload. Schema is owned by the portal contract and
+  // versioned with the protocol; core treats it as opaque.
+  bytes data = 4;
+}
