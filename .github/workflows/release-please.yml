@@ -1,0 +1,62 @@
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    name: '🔖 Release Please'
+    # The template does not release itself: repositories created from it copy
+    # CHANGELOG.md and .release-please-manifest.json, and must start clean at
+    # 0.0.0 so their first release is initial-version (0.1.0).
+    if: ${{ github.repository != 'weaveplatform/weaveplatform-template' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      # The org's release-please GitHub App (org variable RP_APP_ID, org
+      # secret RP_APP_PRIVATE_KEY) rather than a personal token: the token is
+      # minted per run and expires within the hour, and it belongs to the org
+      # rather than to whoever created a PAT — a PAT dies with its owner's
+      # access and takes every repository's releases with it.
+      #
+      # Tags pushed with the default GITHUB_TOKEN deliberately do not trigger
+      # workflows, which would leave every release tagged and unbuilt; tags
+      # pushed with the App token do.
+      #
+      # continue-on-error keeps releases working where the App is not yet
+      # installed: the next step falls back to RELEASE_PLEASE_PAT and says so,
+      # because a silent fallback is how a repository ends up believing it
+      # uses the App when it never has.
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        if: ${{ vars.RP_APP_ID != '' }}
+        continue-on-error: true
+        with:
+          app-id: ${{ vars.RP_APP_ID }}
+          private-key: ${{ secrets.RP_APP_PRIVATE_KEY }}
+
+      - name: Which credential
+        env:
+          HAVE_APP_TOKEN: ${{ steps.app-token.outputs.token != '' }}
+        run: |
+          if [ "$HAVE_APP_TOKEN" = true ]; then
+            echo "release-please is using the org's release-please App"
+          else
+            echo "::warning::App token unavailable (RP_APP_ID/RP_APP_PRIVATE_KEY unset, or the App is not installed here) — falling back to RELEASE_PLEASE_PAT"
+          fi
+
+      # Manifest mode: release types and pre-1.0 behaviour live in
+      # release-please-config.json and .release-please-manifest.json. Setting
+      # release-type here would select single-package mode and bypass them.
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ steps.app-token.outputs.token || secrets.RELEASE_PLEASE_PAT }}

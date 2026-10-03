@@ -1,0 +1,31 @@
+# Every dependency tracks its latest release. Updates arrive daily, grouped
+# into one PR per ecosystem, majors included; auto-merge.yml merges each PR
+# once the quality gate passes on it, so the gate is the only thing that can
+# hold an update back.
+# https://docs.github.com/en/code-security/dependabot/working-with-dependabot/dependabot-options-reference
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    groups:
+      github-actions:
+        patterns: ["*"]
+        update-types: ["major", "minor", "patch"]
+    commit-message:
+      # "chore(deps): …": conventional, and not a releasable change
+      prefix: "chore"
+      include: "scope"
+
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    groups:
+      go-modules:
+        patterns: ["*"]
+        update-types: ["major", "minor", "patch"]
+    commit-message:
+      prefix: "chore"
+      include: "scope"

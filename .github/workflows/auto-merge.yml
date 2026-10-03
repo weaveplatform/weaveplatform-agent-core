@@ -1,0 +1,73 @@
+name: deps | Auto-merge
+
+# Merges dependency PRs, Dependabot's and deps-refresh.yml's, once the quality
+# gate has passed on exactly the commit being merged. This is a workflow_run
+# job rather than GitHub's auto-merge so it does not depend on the plan
+# allowing auto-merge or on branch protection naming the gate: the gate's own
+# result is the condition. Majors merge too; a major that breaks the build
+# fails the gate and the PR stays open for a person.
+#
+# workflow_run runs with this repository's secrets, so it never checks out or
+# executes PR code. It reads the PR's metadata and merges by API.
+on:
+  workflow_run:
+    workflows: ['go | Quality gate']
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  merge:
+    name: '🤖 Merge passing dependency PRs'
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      (startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||
+       github.event.workflow_run.head_branch == 'deps/refresh')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      # Merging with the App token means the merge commit on main triggers
+      # the push workflows (the gate on main, release-please); a merge made
+      # with GITHUB_TOKEN would not.
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        continue-on-error: true
+        with:
+          app-id: ${{ vars.RP_APP_ID }}
+          private-key: ${{ secrets.RP_APP_PRIVATE_KEY }}
+
+      - name: Merge
+        env:
+          REPO: ${{ github.repository }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          FALLBACK_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          export GH_TOKEN="${APP_TOKEN:-$FALLBACK_TOKEN}"
+          pr=$(gh pr list -R "$REPO" --head "$HEAD_BRANCH" --state open \
+                --json number,author,headRefOid \
+                -q '.[] | select(.author.login == "app/dependabot" or .author.login == "app/weaveplatform-release-please") | "\(.number) \(.headRefOid)"')
+          if [ -z "$pr" ]; then
+            echo "no open dependency PR from a trusted author on $HEAD_BRANCH"
+            exit 0
+          fi
+          number=${pr% *}; head=${pr#* }
+          if [ "$head" != "$HEAD_SHA" ]; then
+            echo "PR #$number moved on since the gate ran ($HEAD_SHA -> $head); the next gate run decides"
+            exit 0
+          fi
+          # A PR that touches workflow files needs the workflows permission to
+          # merge; the App does not have it, GITHUB_TOKEN merges those.
+          gh pr merge "$number" -R "$REPO" --squash --delete-branch --match-head-commit "$HEAD_SHA" \
+            || GH_TOKEN="$FALLBACK_TOKEN" gh pr merge "$number" -R "$REPO" --squash --delete-branch --match-head-commit "$HEAD_SHA"

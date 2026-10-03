@@ -1,0 +1,110 @@
+name: deps | Refresh
+
+# Moves everything Dependabot cannot to its latest release, and does it on the
+# day a repository is born rather than at Dependabot's first scheduled run:
+#
+#   - the go directive, to the latest stable Go release;
+#   - every module and every go.mod tool (govulncheck, go-test-coverage),
+#     with go get -u;
+#   - the golangci-lint version in .github/golangci-lint-version;
+#   - modules pinned to a branch or query in .github/deps-refresh.pins.
+#
+# The result goes up as one PR from the org App, so the quality gate runs on
+# it like any other change, and auto-merge.yml merges it when the gate
+# passes. Nothing here edits workflow files: Dependabot owns action pins, and
+# an App push that touched .github/workflows would need the workflows
+# permission the App deliberately lacks.
+on:
+  # Repository birth: creating a repository from the template pushes the
+  # initial commit, which creates main.
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deps-refresh
+  cancel-in-progress: false
+
+env:
+  GOWORK: 'off'
+  BRANCH: deps/refresh
+
+jobs:
+  refresh:
+    name: '♻️ Refresh dependencies'
+    # On push, only the push that created main (the repository's first commit).
+    if: ${{ github.event_name != 'push' || github.event.created }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      # The App token is what makes the PR trigger the quality gate; a PR
+      # opened with GITHUB_TOKEN would sit with no checks and never merge.
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          app-id: ${{ vars.RP_APP_ID }}
+          private-key: ${{ secrets.RP_APP_PRIVATE_KEY }}
+
+      - name: Check Out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: true
+
+      - name: Set up the latest Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          check-latest: true
+          cache: false
+
+      - name: Update the go directive, modules, tools and the linter
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          latest=$(go env GOVERSION | sed -E 's/^go([0-9]+\.[0-9]+).*/\1/')
+          go mod edit -go="$latest"
+          go get -u ./... tool
+          # Some modules' newest version is not "latest": gVisor, for one,
+          # publishes its Go module on the go branch, and its default branch
+          # does not build as a module. Each line of the optional pins file is
+          # a module@query applied after the general update.
+          if [ -f .github/deps-refresh.pins ]; then
+            grep -v -e '^#' -e '^[[:space:]]*$' .github/deps-refresh.pins | while read -r pin; do
+              go get "$pin"
+            done
+          fi
+          go mod tidy
+          gh api repos/golangci/golangci-lint/releases/latest -q .tag_name > .github/golangci-lint-version
+          git status --short
+
+      - name: Open or update the refresh PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "already at latest"
+            exit 0
+          fi
+          git config user.name "weaveplatform-release-please[bot]"
+          git config user.email "weaveplatform-release-please[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add -A
+          git commit -qm "chore(deps): refresh Go, modules, tools and golangci-lint to latest"
+          git push --force -u origin "$BRANCH"
+          if [ -z "$(gh pr list --head "$BRANCH" --state open --json number -q '.[].number')" ]; then
+            gh pr create --head "$BRANCH" \
+              --title "chore(deps): refresh Go, modules, tools and golangci-lint to latest" \
+              --body "Raised by deps-refresh.yml. Merges automatically once the quality gate passes."
+          fi

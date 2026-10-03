@@ -1,0 +1,12 @@
+# Coverage gate: >=95% total, >=90% per package, blocking in CI.
+# The profile is produced by `make cover`, which merges every cover/*
+# directory (unit tests on each OS, acceptance runs) with `go tool covdata`.
+profile: cover/coverage.out
+threshold:
+  file: 0
+  package: 90
+  total: 95
+exclude:
+  paths:
+    # Binary entry points: thin shims over internal/.
+    - ^cmd/
