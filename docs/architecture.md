@@ -8,7 +8,7 @@ agent, any device; **core is the surface, modules are the products**.
 
 Three repositories, three roles. Core and modules never import each other: they meet on the
 wire. Core owns that wire and keeps its own implementation of it; the module SDK and every
-module live in `weaveplatform-agent-modules`; `weaveplatform-channels` is the signed registry.
+module live in `weaveplatform-agent-modules`; `weaveplatform-release-channels` is the signed registry.
 
 ```mermaid
 flowchart TD
@@ -20,7 +20,7 @@ flowchart TD
         sdk["<b>sdk</b> — the module SDK<br/>modulesdk, testkit, its own protocol<br/>packages + generated Go"]
         mods["weave-&lt;os&gt;-&lt;capability&gt; modules<br/>one module per capability"]
     end
-    channels["<b>weaveplatform-channels</b><br/>signed channel manifests, signing keys<br/>(data, no Go)"]
+    channels["<b>weaveplatform-release-channels</b><br/>signed channel manifests, signing keys<br/>(data, no Go)"]
     bindings["go-bindings-*<br/>macosplatform · win32 · wmi"]
 
     proto -->|"buf generate"| core
@@ -59,7 +59,7 @@ module built against the protocol-1 SDK against today's core. The handshake line
 the `hvchannel` framing are hand-written on both sides, so a change to either is a protocol
 change that lands here and in the module SDK.
 
-`weaveplatform-channels` is deliberately not a Go dependency of anything: core consumes its
+`weaveplatform-release-channels` is deliberately not a Go dependency of anything: core consumes its
 *documents* over HTTP and verifies them against a root key baked into core
 (`internal/manifestverify`). A signing CVE is a core patch, not an SDK rebuild.
 

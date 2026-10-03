@@ -159,7 +159,7 @@ never imports the provider SDK
 The module SDK (`github.com/weaveplatform/weaveplatform-agent-modules/sdk`) and every module
 (`weave-<os>-<capability>`, for example `weave-linux-presence`) live in
 `weaveplatform-agent-modules`, and each module releases from there;
-`weaveplatform-channels` is the signed registry of which module versions a device may run.
+`weaveplatform-release-channels` is the signed registry of which module versions a device may run.
 Core ships no modules and no module release pipeline, the way Terraform core ships only
 `internal/builtin/providers/terraform`. Module work goes to `weaveplatform-agent-modules`.
 

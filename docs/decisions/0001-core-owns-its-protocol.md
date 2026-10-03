@@ -55,7 +55,7 @@ The three repositories:
   `terraform-plugin-go` and `terraform-plugin-framework`) and every module, one per
   capability per OS, named `weave-<os>-<capability>` (for example `weave-linux-presence`),
   each with its own release.
-- **weaveplatform-channels** is the signed registry, the counterpart of the Terraform
+- **weaveplatform-release-channels** is the signed registry, the counterpart of the Terraform
   Registry: channel manifests that say which module versions a device may run, verified by
   core before anything is executed.
 

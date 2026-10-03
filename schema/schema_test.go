@@ -49,7 +49,7 @@ func validate(t *testing.T, s *jsonschema.Schema, doc string) error {
 	return s.Validate(v)
 }
 
-// The seed document weaveplatform-channels' promote workflow writes, a
+// The seed document weaveplatform-release-channels' promote workflow writes, a
 // module promotion as that workflow assembles it, and an image promotion as
 // weaveplatform-oci's `weaveoci channel promote` writes it.
 var valid = map[string]string{
