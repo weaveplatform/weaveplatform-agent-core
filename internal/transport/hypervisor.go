@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/protocol/hvchannel"
+	"github.com/weaveplatform/weaveplatform-agent-core/internal/registry"
 )
 
 // The hypervisor channel is a single byte pipe (virtio-serial / vsock /
@@ -35,7 +36,7 @@ var errNotAuthenticated = errors.New("transport: hypervisor channel is not authe
 // HypervisorPeer implements Peer over a single owned connection.
 type HypervisorPeer struct {
 	log     *slog.Logger
-	deliver func(module, kind string, data []byte)
+	deliver func(module, kind string, data []byte) *hvchannel.DeliveryFailed
 
 	conn io.Closer
 	r    *bufio.Reader
@@ -46,6 +47,10 @@ type HypervisorPeer struct {
 	// this VM's key. Never nil: an unprovisioned guest gets one that refuses
 	// everything, because failing closed is the point.
 	auth *channelAuth
+
+	// modules answers modules.list and feeds modules.changed. Nil answers an
+	// empty list and pushes nothing.
+	modules *registry.Registry
 
 	// onAuthenticated runs on the read loop once the peer has authenticated,
 	// after the result frame is on the wire; onClosed runs when the read loop
@@ -78,6 +83,7 @@ func (m *Mux) ConnectHypervisor(
 		return fmt.Errorf("transport: opening hypervisor channel: %w", err)
 	}
 	p := newPeer(rwc, m.Log, m.deliver, newChannelAuth(m.Log, keyPath))
+	p.modules = m.Registry
 	p.onAuthenticated = m.flushHypervisor
 	m.setHypervisor(p)
 	p.start(ctx)
@@ -106,7 +112,7 @@ func newHypervisorPeer(
 	ctx context.Context,
 	rwc io.ReadWriteCloser,
 	log *slog.Logger,
-	deliver func(module, kind string, data []byte),
+	deliver func(module, kind string, data []byte) *hvchannel.DeliveryFailed,
 	auth *channelAuth,
 ) *HypervisorPeer {
 	p := newPeer(rwc, log, deliver, auth)
@@ -117,7 +123,7 @@ func newHypervisorPeer(
 func newPeer(
 	rwc io.ReadWriteCloser,
 	log *slog.Logger,
-	deliver func(module, kind string, data []byte),
+	deliver func(module, kind string, data []byte) *hvchannel.DeliveryFailed,
 	auth *channelAuth,
 ) *HypervisorPeer {
 	return &HypervisorPeer{
@@ -153,12 +159,14 @@ func (p *HypervisorPeer) Send(_ context.Context, module, kind string, data []byt
 // send writes without the authentication check. Only the handshake itself may use
 // it — the frames that establish the authentication cannot be gated on it.
 func (p *HypervisorPeer) send(module, kind string, data []byte) error {
+	return p.write(hvchannel.Envelope{Module: module, Kind: kind, Data: data})
+}
+
+func (p *HypervisorPeer) write(env hvchannel.Envelope) error {
+	kind := env.Kind
 	p.wmu.Lock()
 	defer p.wmu.Unlock()
-	if err := hvchannel.WriteEnvelope(
-		p.w,
-		hvchannel.Envelope{Module: module, Kind: kind, Data: data},
-	); err != nil {
+	if err := hvchannel.WriteEnvelope(p.w, env); err != nil {
 		return fmt.Errorf("transport: writing %q: %w", kind, err)
 	}
 	if err := p.w.Flush(); err != nil {
@@ -171,7 +179,10 @@ func (p *HypervisorPeer) send(module, kind string, data []byte) error {
 // out to the addressed module's receivers via deliver, until the connection
 // errors or ctx ends.
 func (p *HypervisorPeer) readLoop(ctx context.Context) {
+	// The modules.changed pusher lives exactly as long as this connection.
+	ctx, cancel := context.WithCancel(ctx)
 	defer func() {
+		cancel()
 		p.conn.Close()
 		if p.onClosed != nil {
 			p.onClosed()
@@ -198,13 +209,7 @@ func (p *HypervisorPeer) readLoop(ctx context.Context) {
 		// Control frames are the channel's own business and never reach a
 		// module. Handled before the gate below, because they ARE the gate.
 		if env.Module == hvchannel.ControlModule {
-			wasOK := p.auth.authenticated()
-			if kind, reply := p.auth.handle(env.Kind, env.Data); kind != "" {
-				p.reply(kind, reply)
-			}
-			if !wasOK && p.auth.authenticated() && p.onAuthenticated != nil {
-				p.onAuthenticated()
-			}
+			p.control(ctx, env)
 			continue
 		}
 		if !p.auth.allows(env.Kind) {
@@ -213,24 +218,73 @@ func (p *HypervisorPeer) readLoop(ctx context.Context) {
 			// with no agent in it.
 			p.log.Warn("hypervisor channel: refusing an operation on an unauthenticated channel",
 				"module", env.Module, "kind", env.Kind)
-			p.reply(
-				hvchannel.KindAuthResult,
-				hvchannel.AuthResult{Reason: "channel is not authenticated"},
-			)
+			p.refuse(env.ID)
 			continue
 		}
-		p.deliver(env.Module, env.Kind, env.Data)
+		failed := p.deliver(env.Module, env.Kind, env.Data)
+		// Only an authenticated host is told: which modules a guest has is
+		// not something the pre-auth exemption for hello discloses, so an
+		// unauthenticated hello for a missing module goes unanswered as before.
+		if failed != nil && p.auth.authenticated() {
+			p.reply(hvchannel.KindDeliveryFailed, env.ID, failed)
+		}
 	}
 }
 
-// reply sends one control frame from the read loop.
-func (p *HypervisorPeer) reply(kind string, payload any) {
+// refuse answers a frame an unauthenticated channel may not carry.
+func (p *HypervisorPeer) refuse(id string) {
+	p.reply(hvchannel.KindAuthResult, id,
+		hvchannel.AuthResult{Reason: "channel is not authenticated"})
+}
+
+// control handles one frame addressed to the channel itself.
+func (p *HypervisorPeer) control(ctx context.Context, env hvchannel.Envelope) {
+	if env.Kind == hvchannel.KindModulesList {
+		if !p.auth.authenticated() {
+			p.log.Warn("hypervisor channel: refusing modules.list on an unauthenticated channel")
+			p.refuse(env.ID)
+			return
+		}
+		p.reply(hvchannel.KindModulesListResult, env.ID, snapshot(p.modules))
+		return
+	}
+	wasOK := p.auth.authenticated()
+	if kind, reply := p.auth.handle(env.Kind, env.Data); kind != "" {
+		p.reply(kind, env.ID, reply)
+	}
+	if !wasOK && p.auth.authenticated() {
+		if p.modules != nil {
+			go p.pushChanges(ctx, p.modules.Watch(ctx))
+		}
+		if p.onAuthenticated != nil {
+			p.onAuthenticated()
+		}
+	}
+}
+
+// pushChanges sends a modules.changed snapshot after every registry change
+// until the connection ends. It runs on its own goroutine, never the read
+// loop: a host that is busy writing to us and not yet reading would otherwise
+// block the loop that drains its writes, and the channel would deadlock.
+func (p *HypervisorPeer) pushChanges(ctx context.Context, changes <-chan struct{}) {
+	for range changes {
+		if ctx.Err() != nil {
+			return
+		}
+		p.reply(hvchannel.KindModulesChanged, "", snapshot(p.modules))
+	}
+}
+
+// reply sends one control frame, echoing the correlation id of the frame it
+// answers (empty for an unsolicited one).
+func (p *HypervisorPeer) reply(kind, id string, payload any) {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		p.log.Error("hypervisor channel: encoding a control reply", "kind", kind, "err", err)
 		return
 	}
-	if err := p.send(hvchannel.ControlModule, kind, data); err != nil {
+	env := hvchannel.Envelope{Module: hvchannel.ControlModule, Kind: kind, Data: data, ID: id}
+	if err := p.write(env); err != nil {
 		p.log.Warn("hypervisor channel: sending a control reply", "kind", kind, "err", err)
 	}
 }

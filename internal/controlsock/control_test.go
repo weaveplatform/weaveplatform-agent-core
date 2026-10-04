@@ -194,6 +194,11 @@ func TestControlReadPaths(t *testing.T) {
 	for _, m := range mods.GetModules() {
 		if m.GetId() == "gated" {
 			gated = m.GetState()
+			// The control view is the registry: the address a host reaches
+			// the module at, and when it entered its state.
+			if m.GetAddress() != "gated" || m.GetSinceMs() == 0 {
+				t.Errorf("gated module address %q since %d", m.GetAddress(), m.GetSinceMs())
+			}
 		}
 	}
 	// The reason a module is not running travels with its state.

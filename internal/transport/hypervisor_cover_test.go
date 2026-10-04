@@ -101,9 +101,16 @@ func TestReadLoopWireFailures(t *testing.T) {
 		readErr: errors.New("device gone"),
 		closed:  make(chan struct{}),
 	}
-	newHypervisorPeer(context.Background(), wire, log, func(string, string, []byte) {
-		t.Error("control frames must never reach a module")
-	}, &channelAuth{log: log})
+	newHypervisorPeer(
+		context.Background(),
+		wire,
+		log,
+		func(string, string, []byte) *hvchannel.DeliveryFailed {
+			t.Error("control frames must never reach a module")
+			return nil
+		},
+		&channelAuth{log: log},
+	)
 	waitClosed(t, wire)
 
 	out := logs.String()

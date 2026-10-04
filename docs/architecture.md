@@ -165,6 +165,32 @@ cadence, and the module **pushes** a watchdog ping (the sd_notify WATCHDOG shape
 intervals is restarted — a proactive signal that catches a module which can no longer
 maintain its keepalive stream, without waiting on the next poll.
 
+## The module registry
+
+Core keeps one table of the modules installed on this machine (`internal/registry`). The
+supervisor writes it: every module it registers, with its manifest identity (id, version,
+channel address, required capabilities, privilege, session) and its supervision state (state
+and detail, health, restarts, pid, and when it entered the state). A module leaves the table
+only once it has stopped, when it is uninstalled or replaced.
+
+Everything else reads it, so no two answers to "which modules are here, and are they up" can
+disagree:
+
+| Reader | What it does with it |
+|---|---|
+| `internal/transport` | explains a frame it could not deliver: no entry at the address is `not_installed`, an entry with no receiver is `not_running` with the entry's state |
+| the host channel | `modules.list` and the `modules.changed` push to an authenticated host ([`PROTOCOL.md`](PROTOCOL.md#the-host-channels-control-address)) |
+| `RegistryService` | the module view: id, version, address, state, health ([`services.md`](services.md)) |
+| `ControlService.Modules` | `weavectl modules`, the operator view, which adds pid and detail |
+| `internal/lifecycle` | the install health gate waits on the entry's state and health |
+
+Watchers are woken on a change a reader would act on: a module added or removed, or any
+of its identity, state, detail, pid, restarts or health status and reason changing. A health
+poll that only refreshes the details map does not wake anyone — the supervisor re-records every
+module on every poll, and a push to every host each time would bury the changes that matter.
+Wake-ups coalesce, and every reader takes a whole snapshot with a `revision` that only
+increases, so a slow reader skips to the latest state rather than replaying a backlog.
+
 ## Sessions
 
 A manifest's `session` says where the module lives. `system` modules are core's children in
@@ -382,8 +408,9 @@ user:
 | Package | Owns |
 |---|---|
 | `internal/supervise` | spawn, verify-before-exec, handshake, health, backoff, start limit, Job Objects, per-session launch |
+| `internal/registry` | the one table of installed modules and their state; change notification ([The module registry](#the-module-registry)) |
 | `internal/session` | who is at the console: per-OS source, polling watcher |
-| `internal/hostserv` | per-module gRPC host services, token-gated: store, policy, events, identity, transport |
+| `internal/hostserv` | per-module gRPC host services, token-gated: store, policy, events, identity, transport, log, watchdog, registry |
 | `internal/store` | one bbolt file, bucket per namespace, AES-256-GCM per value (namespace+key as AAD), master key sealed by `keyprotect` (DPAPI / keyfile → Secure Enclave/TPM later) |
 | `internal/policy` | read the local policy file on change, cache the last good document in the store, wake Watch streams on change ([Policy](#policy)) |
 | `internal/identity` | Ed25519 device identity behind a Provider seam, local to the machine; per-module scoped credentials (fail closed today) |
@@ -569,6 +596,15 @@ identical. Neither discloses more than the channel's existence already does.
 
 A refusal is sent, not merely logged. Silence would leave the caller waiting out a
 timeout indistinguishable from a guest that is not there.
+
+The same reasoning applies after authentication. A frame for a module that is not
+installed, has no receiver open, or whose inbound queue is full is answered with
+`delivery.failed` on the channel's own address, carrying the reason and, for a module that
+is installed but not running, its state from the [registry](#the-module-registry). Before
+authentication core stays silent about it, since naming which modules are installed is more
+than the hello exemption is for. The host matches the answer to its call by the envelope's
+optional `id`, which core echoes; core never reads the opaque `data` to find one
+([`PROTOCOL.md`](PROTOCOL.md#the-host-channels-control-address)).
 
 The `weave-<os>-<capability>` modules in `weaveplatform-agent-modules` are what runs on the
 other side of it.

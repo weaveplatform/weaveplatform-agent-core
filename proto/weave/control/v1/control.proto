@@ -39,12 +39,18 @@ message ModuleStatus {
   string id = 1;
   string version = 2;
   uint32 protocol = 3;
-  // Supervisor state: "running", "starting", "backoff", "breaker",
-  // "unsupported-protocol", "requirements-unmet", "stopped".
+  // Lifecycle state, then ": " and the detail when there is one. States:
+  // "pending", "starting", "running", "backoff", "start-limited",
+  // "unsupported-protocol", "requirements-unmet", "waiting-for-session",
+  // "stopped".
   string state = 4;
   weave.agent.v1.Health health = 5;
   int32 pid = 6;
   uint32 restarts = 7;
+  // The name the module answers to on the host channel.
+  string address = 8;
+  // When the module entered its state, in Unix milliseconds.
+  int64 since_ms = 9;
 }
 
 message ModulesResponse {

@@ -405,12 +405,7 @@ func (m *Manager) healthGate(ctx context.Context, id string) error {
 }
 
 func (m *Manager) statusOf(id string) (supervise.Status, bool) {
-	for _, st := range m.Supervisor.Statuses() {
-		if st.ID == id {
-			return st, true
-		}
-	}
-	return supervise.Status{}, false
+	return m.Supervisor.Modules().Get(id)
 }
 
 // prune deletes every version except keep and prev.

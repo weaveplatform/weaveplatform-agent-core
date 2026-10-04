@@ -17,6 +17,8 @@ import (
 
 	agentv1 "github.com/weaveplatform/weaveplatform-agent-core/internal/gen/go/weave/agent/v1"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/hostserv"
+	"github.com/weaveplatform/weaveplatform-agent-core/internal/protocol/hvchannel"
+	"github.com/weaveplatform/weaveplatform-agent-core/internal/registry"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/werror"
 )
 
@@ -42,6 +44,11 @@ type Mux struct {
 	// MaxQueued bounds the offline queue by message count; 0 gets a
 	// default. Over the cap, the oldest queued message is dropped.
 	MaxQueued int
+	// Registry is the installed-module table: it says why a frame could not
+	// be delivered, and it is what the host channel's modules.list and
+	// modules.changed report. Nil reports every address without a receiver
+	// as not installed and an empty module list; core always sets it.
+	Registry *registry.Registry
 
 	mu      sync.Mutex
 	nextID  uint64
@@ -158,30 +165,49 @@ const inboundBuffer = 64
 // deliver fans an inbound hypervisor message out to every Receive stream for
 // the addressed module. Called from the hypervisor peer's read loop. A slow
 // or absent subscriber does not block the loop: the send is non-blocking and a
-// full/missing channel drops the message with a warning.
-func (m *Mux) deliver(module, kind string, data []byte) {
-	m.subMu.Lock()
-	subs := append([]chan *agentv1.TransportMessage(nil), m.subs[module]...)
-	m.subMu.Unlock()
-	if len(subs) == 0 {
-		m.Log.Warn("inbound hypervisor message for module with no receiver; dropped",
-			"module", module, "kind", kind)
-		return
-	}
+// full/missing channel drops the message with a warning. A message no
+// receiver took comes back as the reason, for the peer to tell the host.
+func (m *Mux) deliver(module, kind string, data []byte) *hvchannel.DeliveryFailed {
 	msg := &agentv1.TransportMessage{Peer: agentv1.Peer_PEER_HYPERVISOR, Kind: kind, Data: data}
+	// The sends happen under subMu, not after copying the slice out: a
+	// Receive whose context ends closes its channel under the same lock, and
+	// a send racing that close would panic the read loop.
+	m.subMu.Lock()
+	subs := m.subs[module]
+	accepted := false
 	for _, ch := range subs {
 		select {
 		case ch <- msg:
+			accepted = true
 		default:
-			m.Log.Warn(
-				"inbound hypervisor receiver slow; message dropped",
-				"module",
-				module,
-				"kind",
-				kind,
-			)
+			m.Log.Warn("inbound hypervisor receiver slow; message dropped",
+				"module", module, "kind", kind)
 		}
 	}
+	m.subMu.Unlock()
+	switch {
+	case accepted:
+		return nil
+	case len(subs) > 0:
+		return &hvchannel.DeliveryFailed{Module: module, Kind: kind, Reason: hvchannel.ReasonBusy}
+	}
+	m.Log.Warn("inbound hypervisor message for module with no receiver; dropped",
+		"module", module, "kind", kind)
+	return m.undeliverable(module, kind)
+}
+
+// undeliverable explains a message for an address nothing is receiving on.
+func (m *Mux) undeliverable(module, kind string) *hvchannel.DeliveryFailed {
+	f := &hvchannel.DeliveryFailed{Module: module, Kind: kind, Reason: hvchannel.ReasonNotInstalled}
+	if m.Registry == nil {
+		return f
+	}
+	if mod, ok := m.Registry.ByAddress(module); ok {
+		f.Reason = hvchannel.ReasonNotRunning
+		f.State = string(mod.State)
+		f.Detail = mod.Detail
+	}
+	return f
 }
 
 // known reports whether peer names a channel core has. PEER_UNSPECIFIED is

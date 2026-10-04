@@ -9,7 +9,7 @@ module, the console user's (see [Sessions](architecture.md#sessions)).
 flowchart LR
     subgraph core
         sup["supervisor<br/>(client)"]
-        hs["host services (server)<br/>StoreService · PolicyService ·<br/>EventBusService · IdentityService ·<br/>TransportService · LogService"]
+        hs["host services (server)<br/>StoreService · PolicyService ·<br/>EventBusService · IdentityService ·<br/>TransportService · LogService ·<br/>WatchdogService · RegistryService"]
         cs["ControlService (server)"]
     end
     subgraph module
@@ -33,8 +33,16 @@ flowchart LR
 | `weave/agent/v1/transport.proto` | `TransportService` | core | modules never open sockets; one peer, the host channel (`PEER_HYPERVISOR`) |
 | `weave/agent/v1/log.proto` | `LogService` | core | slog records into core's pipeline; stderr is the fallback |
 | `weave/agent/v1/watchdog.proto` | `WatchdogService` | core | module liveness beats on the interval core declared at Init |
+| `weave/agent/v1/registry.proto` | `RegistryService` | core | read-only view of the installed modules — id, version, address, state, health; `Watch` streams the current snapshot, then one per change |
 | `weave/agent/v1/ui.proto` | (messages only) | — | surfaces as data; the portal renders |
 | `weave/control/v1/control.proto` | `ControlService` | core | weavectl and the portal |
+
+`RegistryService` is open to every module behind the token gate and nothing more, like
+`IdentityService.WhoAmI`: what it shows is what a module could learn by sending to an address
+and seeing what comes back, so a per-module allow-list would protect nothing. It leaves out
+what only an operator needs (process ids, placement); `ControlService.Modules` has those. Both
+read the same [registry](architecture.md#the-module-registry), as does the host channel's
+`modules.list` ([`PROTOCOL.md`](PROTOCOL.md#the-host-channels-control-address)).
 
 The handshake that precedes all of this — environment in, one stdout line back, exit 78 for
 clean refusal — is normative in [`PROTOCOL.md`](PROTOCOL.md), with a sequence diagram in
