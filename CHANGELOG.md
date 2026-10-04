@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.9.4](https://github.com/weaveplatform/weaveplatform-agent-core/compare/v0.9.3...v0.9.4) (2026-10-04)
+
+
+### Features
+
+* install the channel trust anchor from boot media ([3533ce3](https://github.com/weaveplatform/weaveplatform-agent-core/commit/3533ce3cd8c4beb6ba67a309d35d1ce47174e96d))
+* **packaging:** macOS package and launchd daemon ([9531560](https://github.com/weaveplatform/weaveplatform-agent-core/commit/9531560e58592466b47cae812ec08e460bcafa6d))
+* run weave-agent in macOS guests ([94b40c2](https://github.com/weaveplatform/weaveplatform-agent-core/commit/94b40c2d7e74c151657f4323c3814ba434e1519c))
+* watch the modules directory on macOS ([5431935](https://github.com/weaveplatform/weaveplatform-agent-core/commit/543193503ce72c2f68a90c8efb6e6b4941753c09))
+
 ## [0.9.3](https://github.com/weaveplatform/weaveplatform-agent-core/compare/v0.9.2...v0.9.3) (2026-10-04)
 
 
