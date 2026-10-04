@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.9.3](https://github.com/weaveplatform/weaveplatform-agent-core/compare/v0.9.2...v0.9.3) (2026-10-04)
+
+
+### Features
+
+* **packaging:** reload weave-agent through systemd ([b795897](https://github.com/weaveplatform/weaveplatform-agent-core/commit/b795897d97ed18b4ad0b4e0c52412eef5469df26))
+* reload modules without restarting core ([bda42f6](https://github.com/weaveplatform/weaveplatform-agent-core/commit/bda42f6521453ef3acfb2f7fe2f837cc5d91043b))
+* reload modules without restarting core ([3e06d7d](https://github.com/weaveplatform/weaveplatform-agent-core/commit/3e06d7dee466333062ec14d19ed73a824c25ae41))
+
+
+### Bug Fixes
+
+* stage module binaries on Windows so a running module never locks its install ([7265bf8](https://github.com/weaveplatform/weaveplatform-agent-core/commit/7265bf845835d13e156d151aae1d8cd542cc72d4))
+
 ## [0.9.2](https://github.com/weaveplatform/weaveplatform-agent-core/compare/v0.9.1...v0.9.2) (2026-10-04)
 
 
