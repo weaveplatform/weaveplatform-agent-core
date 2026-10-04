@@ -440,7 +440,7 @@ log directories are `/var/lib/weave/run` and `/var/lib/weave/logs`, not the plat
 |---|---|---|---|---|
 | `StateDir` | `/var/lib/weave` | `/Library/Application Support/Weave` | `%ProgramData%\Weave` | `0711` |
 | `RunDir` — sockets | `/run/weave` | `/var/run/weave` | `StateDir\run` | `0711` |
-| `ExecDir` — staged module binaries | `StateDir/exec` | `StateDir/exec` | `StateDir\exec` (unused) | `0711` |
+| `ExecDir` — staged module binaries | `StateDir/exec` | `StateDir/exec` | `StateDir\exec` | `0711` |
 | `LogDir` | `/var/log/weave` | `/Library/Logs/Weave` | `StateDir\logs` | `0700` |
 | `StagingDir`, `ModulesDir`, `core/` | under `StateDir` | under `StateDir` | under `StateDir` | `0700` |
 
@@ -469,7 +469,15 @@ user:
   The control socket in `RunDir` is a `0600` root socket whose peer uid must be root or core.
 - **Windows** holds the same boundaries with ACLs rather than modes: the installer protects
   `StateDir` to SYSTEM and Administrators, a module's image is opened with core's access by
-  `CreateProcessAsUser` (so nothing is staged), and host endpoints are SDDL'd pipes.
+  `CreateProcessAsUser`, and host endpoints are SDDL'd pipes. **Every** module is staged
+  there, whatever it runs as, for a different reason: Windows keeps a running image's file
+  open against deletion, so a module run from where it is installed could not be removed or
+  replaced while it runs — an installer, the lifecycle manager's prune and the module reload
+  would all be refused. Each launch copies the binary into a fresh directory under
+  `ExecDir\<id>\`, inheriting `StateDir`'s ACL, and **verifies the copy**: the Authenticode
+  signature is embedded, so the copy carries it, and checking the file actually exec'd leaves
+  no gap between check and launch. The copy goes when the module stops (retried while
+  Windows lets go of the image) and otherwise at the next launch or start-up sweep.
 
 ## Core's internal layout
 

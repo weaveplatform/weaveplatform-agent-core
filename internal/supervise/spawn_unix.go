@@ -203,26 +203,6 @@ func (t *target) stageBinary(bin string) (string, error) {
 	return staged, nil
 }
 
-func copyExecutable(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("opening module binary: %w", err)
-	}
-	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o555)
-	if err != nil {
-		return fmt.Errorf("creating staged binary: %w", err)
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return fmt.Errorf("copying module binary: %w", err)
-	}
-	if err := out.Close(); err != nil {
-		return fmt.Errorf("closing staged binary: %w", err)
-	}
-	return nil
-}
-
 // prepareSocketDir makes a dropped module able to create its own listener
 // in, and dial host.sock inside, the per-module socket dir. Core owns the
 // dir 0700; without the chown a dropped module EACCESes. The run dir and

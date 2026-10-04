@@ -218,6 +218,10 @@ func TestReconcileAddAndRemove(t *testing.T) {
 	if m, ok := h.status(fixtureID); ok {
 		t.Fatalf("removed module still registered: %+v", m)
 	}
+	// Nothing runnable is left behind (Windows stages every module there).
+	if _, err := os.Stat(h.lay.ModuleExecDir(fixtureID)); !os.IsNotExist(err) {
+		t.Fatalf("staged copy survived removal: %v", err)
+	}
 	if again, _ := h.status("bystander"); !again.Since.Equal(by.Since) {
 		t.Fatal("removing one module disturbed another")
 	}

@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"unsafe"
@@ -24,6 +25,9 @@ import (
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/session"
 )
 
+// errNoExecDir: a launch with no layout to stage the binary under.
+var errNoExecDir = errors.New("no exec dir to stage the module binary in")
+
 // errBadPID: a process id that does not fit a Windows DWORD.
 var errBadPID = errors.New("process id out of range")
 
@@ -37,14 +41,15 @@ type jobHandle struct {
 // core's own token (restricted for "service"); a per-user module runs from
 // the console user's token, which only SYSTEM can obtain.
 type target struct {
-	m     *manifest.Manifest
-	sess  *session.Session
-	token foundation.HANDLE
-	sid   string
+	layout layout.Layout
+	m      *manifest.Manifest
+	sess   *session.Session
+	token  foundation.HANDLE
+	sid    string
 }
 
-func newTarget(_ layout.Layout, m *manifest.Manifest, sess *session.Session) (*target, error) {
-	t := &target{m: m, sess: sess}
+func newTarget(l layout.Layout, m *manifest.Manifest, sess *session.Session) (*target, error) {
+	t := &target{layout: l, m: m, sess: sess}
 	if sess == nil {
 		return t, nil
 	}
@@ -76,10 +81,48 @@ func (t *target) close() {
 	}
 }
 
-// stageBinary is the installed path: CreateProcessAsUser opens the image
-// with core's access, not the user's, so nothing needs to be copied out of
-// the SYSTEM-only state tree.
-func (t *target) stageBinary(bin string) (string, error) { return bin, nil }
+// stageBinary copies the module binary under the layout's ExecDir and
+// returns the copy, which is what is verified and exec'd. Windows keeps a
+// running image's file open without FILE_SHARE_DELETE, so a module run from
+// where it is installed could not be removed or replaced while it runs: an
+// installer, the lifecycle manager's prune and core's module reload would all
+// fail with "Access is denied". The copy takes that lock instead.
+//
+// Verification runs on the copy, not the original: the Authenticode
+// signature is embedded, so the copy carries it, and checking the file that
+// is actually exec'd leaves no window between the check and the launch. The
+// copy lives in core's state tree, whose DACL (SYSTEM and Administrators,
+// inherited; see winsvc.RestrictDir) nobody else can write. Process creation
+// opens the image with core's token, so a restricted or per-user module needs
+// no access of its own to it.
+//
+// Each launch gets a fresh directory: the previous copy may still be held
+// for a moment after its process exits, and must not stop the next launch.
+// Stale ones are removed here when they can be, when the module stops, and
+// by SweepOrphans.
+func (t *target) stageBinary(bin string) (string, error) {
+	if t.layout.ExecDir == "" {
+		return "", errNoExecDir
+	}
+	root := t.layout.ModuleExecDir(t.m.ID)
+	if entries, err := os.ReadDir(root); err == nil {
+		for _, e := range entries {
+			_ = os.RemoveAll(filepath.Join(root, e.Name()))
+		}
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return "", fmt.Errorf("creating staging dir: %w", err)
+	}
+	dir, err := os.MkdirTemp(root, "run-")
+	if err != nil {
+		return "", fmt.Errorf("creating staging dir: %w", err)
+	}
+	staged := filepath.Join(dir, filepath.Base(bin))
+	if err := copyExecutable(bin, staged); err != nil {
+		return "", err
+	}
+	return staged, nil
+}
 
 // prepareSocketDir is a no-op on Windows: the host endpoint is a named pipe
 // whose access is its SDDL, not a directory's ownership.

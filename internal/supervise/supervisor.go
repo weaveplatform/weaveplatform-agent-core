@@ -315,6 +315,14 @@ func (s *Supervisor) StopModule(id string) {
 	// After the runner has finished, not before: its last state change
 	// would otherwise put the entry straight back.
 	r.reg.Remove(id)
+	// The staged copy goes with the process, so a module removed from disk
+	// leaves nothing runnable behind.
+	if s.Layout.ExecDir == "" {
+		return
+	}
+	if err := removeStaged(s.Layout.ModuleExecDir(id)); err != nil {
+		r.log.Warn("staged binary left behind; swept at next start", "err", err)
+	}
 }
 
 // Replace hot-swaps a module: the old process drains and stops, then the
