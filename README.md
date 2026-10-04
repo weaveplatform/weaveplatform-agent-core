@@ -66,7 +66,8 @@ One repository, one Go module, `github.com/weaveplatform/weaveplatform-agent-cor
 | `internal/protocol` | Core's own implementation of the wire: `handshake`, `ipc`, `hvchannel`, `manifest` |
 | `internal/gen` | Generated from `proto/` by `buf generate`; committed, and CI fails if it drifts |
 | `proto/`, `schema/` | The protocol (`weave/agent/v1`, `weave/control/v1`) and the manifest JSON Schemas |
-| `packaging/` | The deb (systemd unit and scripts), the Windows installer, the apt repository tool, the cloud-init bring-up seed |
+| `internal/provision` | The channel trust anchor from a host-supplied provisioning volume, for guests without cloud-init |
+| `packaging/` | The deb (systemd unit and scripts), the macOS package (launchd daemon and scripts), the Windows installer, the apt repository tool, the cloud-init bring-up seed |
 | `test/protocompat` | Core at protocol N accepts a pinned N-1 module and cleanly refuses one outside the window |
 
 ## Building
@@ -84,7 +85,9 @@ agent locally, and testing.
 
 release-please keeps a release PR open on `main`; merging it tags `vX.Y.Z`, and the tag runs
 goreleaser: per-platform archives of the four binaries, the `weave-agent` `.deb`, and a
-checksum file signed keylessly with cosign. Core ships no modules. See
+checksum file signed keylessly with cosign; a macOS runner then builds the
+`weave-agent_<version>_darwin_arm64.pkg` installer from the released binaries
+([`docs/macos-package.md`](docs/macos-package.md)). Core ships no modules. See
 [`docs/development.md`](docs/development.md#releasing).
 
 ## Writing a module

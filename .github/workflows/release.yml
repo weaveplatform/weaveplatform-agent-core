@@ -2,7 +2,7 @@ name: release
 
 # Builds and attaches the release artifacts when release-please tags a
 # release: the binaries for six platforms, the archives, the weave-agent
-# .deb, and a cosign-signed checksum file.
+# .deb, a cosign-signed checksum file, and the macOS installer package.
 #
 # release-please owns the version, the changelog and the GitHub release
 # itself; this only builds the artifacts and appends them. A failure here
@@ -72,3 +72,70 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The macOS installer package. pkgbuild exists only on macOS, and goreleaser
+  # has no pkg output, so this runs after goreleaser on a macOS runner and
+  # packages the very binaries goreleaser released: the darwin/arm64 archive,
+  # checked against the signed checksum file first. arm64 only: macOS guests
+  # on Virtualization.framework exist only on Apple silicon.
+  darwin-pkg:
+    name: '🍎 macOS installer package'
+    needs: [goreleaser]
+    runs-on: macos-latest
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      GOWORK: 'off'
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - name: Check Out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Fetch and verify the darwin/arm64 binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          ver=${TAG#v}
+          mkdir -p dl bin
+          gh release download "$TAG" -R "$REPO" -D dl \
+            -p "weaveplatform-agent_${ver}_darwin_arm64.tar.gz" \
+            -p "weaveplatform-agent_${ver}_checksums.txt" \
+            -p "weaveplatform-agent_${ver}_checksums.txt.sigstore.json"
+          cosign verify-blob \
+            --bundle "dl/weaveplatform-agent_${ver}_checksums.txt.sigstore.json" \
+            --certificate-identity-regexp "https://github.com/${REPO}/.*" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "dl/weaveplatform-agent_${ver}_checksums.txt"
+          (cd dl && shasum -a 256 -c "weaveplatform-agent_${ver}_checksums.txt" --ignore-missing)
+          tar -xzf "dl/weaveplatform-agent_${ver}_darwin_arm64.tar.gz" -C bin
+
+      # Unsigned: no Developer ID Installer identity is configured for this
+      # repository. With one in the keychain, WEAVE_PKG_SIGN_IDENTITY signs it.
+      - name: Build the package
+        env:
+          TAG: ${{ github.ref_name }}
+        run: sh packaging/darwin/build-pkg.sh "${TAG#v}" bin dist arm64
+
+      - name: Sign and attach
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          pkg="dist/weave-agent_${TAG#v}_darwin_arm64.pkg"
+          cosign sign-blob --yes --bundle "${pkg}.sigstore.json" "$pkg"
+          gh release upload "$TAG" -R "$REPO" --clobber "$pkg" "${pkg}.sigstore.json"

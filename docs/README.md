@@ -17,6 +17,8 @@
 - [`development.md`](development.md) — local setup, running the agent, testing, the quality
   gate and releasing.
 - [`linux-package.md`](linux-package.md) — the deb, the apt repository and the cloud-init seed.
+- [`macos-package.md`](macos-package.md) — the macOS installer package, the launchd daemon, the
+  `_weaveagent` account, hot-reload, the provisioning volume and uninstalling.
 - [`windows-install.md`](windows-install.md) — the `WeaveAgent` service and the unattended
   installer.
 - [`WINDOWS_HANDOFF.md`](WINDOWS_HANDOFF.md) — platform security work that needs a Windows,

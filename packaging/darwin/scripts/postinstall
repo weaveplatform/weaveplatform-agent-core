@@ -1,0 +1,125 @@
+#!/bin/sh
+# Create the service account, then load the daemon. installer runs this as
+# root with $1 the package, $2 the install location and $3 the target volume.
+#
+# WEAVE_PKG_DRYRUN=1 prints every command that would change the system instead
+# of running it; the account lookups still run (they only read). DSCL and
+# LAUNCHCTL name the tools, so a test can stand in for them.
+set -eu
+
+LABEL=run.weaveplatform.agent
+PLIST=/Library/LaunchDaemons/$LABEL.plist
+LIBEXEC=/usr/local/libexec/weave
+LOGDIR=/Library/Logs/Weave
+ACCOUNT=_weaveagent
+DSCL=${DSCL:-/usr/bin/dscl}
+LAUNCHCTL=${LAUNCHCTL:-/bin/launchctl}
+DRY=${WEAVE_PKG_DRYRUN:-}
+target=${3:-/}
+
+run() {
+	if [ -n "$DRY" ]; then
+		echo "+ $*"
+	else
+		"$@"
+	fi
+}
+
+# Installed onto a volume that is not the running system (an image being
+# built): its accounts are not this system's and its launchd is not running.
+# launchd loads the plist when that volume boots; the account is made by
+# running this script there (installer -pkg ... -target / again).
+if [ "$target" != / ]; then
+	echo "weave-agent: installed onto $target; run the package on that system once it boots to create $ACCOUNT"
+	exit 0
+fi
+
+# The package's own tree is root's and nobody else's, whatever was there
+# before. The modules directory inside it is where module packages install.
+run chown root:wheel "$LIBEXEC" "$LIBEXEC/modules"
+run chmod 0755 "$LIBEXEC" "$LIBEXEC/modules"
+
+# Created here, not shipped in the payload: the payload would carry its parent,
+# and installer applies a payload directory's mode to one that already exists —
+# /Library/Logs is root:admin 0775. Admins may read the log; others may not.
+run mkdir -p "$LOGDIR"
+run chown root:admin "$LOGDIR"
+run chmod 0750 "$LOGDIR"
+
+# _weaveagent is the account "service"-privilege modules run as when core is
+# root (internal/supervise: serviceAccount, systemCreds). Core uses only its
+# uid and primary gid: no login shell, no home, hidden from the login window.
+#
+# dscl rather than sysadminctl: sysadminctl makes interactive users (a home, a
+# secure token prompt), not daemon accounts. Every step is idempotent, a group
+# left behind by an earlier install is adopted, and a record a failed run left
+# half-made is completed rather than refused.
+
+# pick_id prints the highest id below 500 — the range macOS keeps for system
+# accounts — that no user and no group has.
+pick_id() {
+	used=$({
+		"$DSCL" . -list /Users UniqueID
+		"$DSCL" . -list /Groups PrimaryGroupID
+	} | awk '{print $2}')
+	id=499
+	while [ "$id" -gt 300 ]; do
+		if ! printf '%s\n' "$used" | grep -qx "$id"; then
+			echo "$id"
+			return 0
+		fi
+		id=$((id - 1))
+	done
+	echo "weave-agent: no free system id between 301 and 499" >&2
+	return 1
+}
+
+uid_taken() {
+	"$DSCL" . -list /Users UniqueID | awk '{print $2}' | grep -qx "$1"
+}
+
+gid=$("$DSCL" . -read "/Groups/$ACCOUNT" PrimaryGroupID 2>/dev/null | awk '{print $2}') || true
+if [ -z "$gid" ]; then
+	gid=$(pick_id)
+	run "$DSCL" . -create "/Groups/$ACCOUNT"
+	run "$DSCL" . -create "/Groups/$ACCOUNT" PrimaryGroupID "$gid"
+	run "$DSCL" . -create "/Groups/$ACCOUNT" RealName "Weave agent service modules"
+	run "$DSCL" . -create "/Groups/$ACCOUNT" Password '*'
+fi
+
+if ! "$DSCL" . -read "/Users/$ACCOUNT" UniqueID >/dev/null 2>&1; then
+	uid=$gid
+	if uid_taken "$uid"; then
+		uid=$(pick_id)
+	fi
+	run "$DSCL" . -create "/Users/$ACCOUNT"
+	run "$DSCL" . -create "/Users/$ACCOUNT" UniqueID "$uid"
+	run "$DSCL" . -create "/Users/$ACCOUNT" PrimaryGroupID "$gid"
+	run "$DSCL" . -create "/Users/$ACCOUNT" UserShell /usr/bin/false
+	run "$DSCL" . -create "/Users/$ACCOUNT" NFSHomeDirectory /var/empty
+	run "$DSCL" . -create "/Users/$ACCOUNT" RealName "Weave agent service modules"
+	run "$DSCL" . -create "/Users/$ACCOUNT" Password '*'
+	run "$DSCL" . -create "/Users/$ACCOUNT" IsHidden 1
+fi
+
+# Load the daemon, replacing a running one (an upgrade): bootout stops the old
+# weaveboot, which drains core and its modules first, so the new binaries and
+# any change to the plist both take effect. enable undoes an earlier
+# `launchctl disable`: installing the package is asking for the agent to run.
+run "$LAUNCHCTL" bootout "system/$LABEL" 2>/dev/null || true
+run "$LAUNCHCTL" enable "system/$LABEL"
+# bootstrap straight after bootout can fail while launchd is still tearing
+# the old job down ("Bootstrap failed: 5: Input/output error"); it settles in
+# a second or two.
+tries=0
+until run "$LAUNCHCTL" bootstrap system "$PLIST"; do
+	tries=$((tries + 1))
+	if [ "$tries" -ge 5 ]; then
+		# Not fatal: the files are installed, and launchd loads the plist at
+		# the next boot. Failing here would only mark the install failed.
+		echo "weave-agent: could not load $LABEL; see: launchctl print system/$LABEL" >&2
+		exit 0
+	fi
+	sleep 1
+done
+exit 0

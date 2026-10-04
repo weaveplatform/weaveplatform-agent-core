@@ -85,7 +85,8 @@ flowchart TD
 ```
 
 The init system owns weaveboot and nothing else, on every platform: a systemd unit
-(`packaging/linux/weave-agent.service`), a launchd plist, and on Windows the `WeaveAgent`
+(`packaging/linux/weave-agent.service`), the launchd daemon `run.weaveplatform.agent`
+(`packaging/darwin`, [`macos-package.md`](macos-package.md)), and on Windows the `WeaveAgent`
 service — LocalSystem, automatic start, restart on any failure — which `weaveboot service
 install` registers ([`windows-install.md`](windows-install.md)). Under the SCM weaveboot runs
 the service control dispatcher and turns Stop / PreShutdown into the same context cancel a
@@ -458,6 +459,10 @@ log directories are `/var/lib/weave/run` and `/var/lib/weave/logs`, not the plat
 | `ExecDir` — staged module binaries | `StateDir/exec` | `StateDir/exec` | `StateDir\exec` | `0711` |
 | `LogDir` | `/var/log/weave` | `/Library/Logs/Weave` | `StateDir\logs` | `0700` |
 | `StagingDir`, `ModulesDir`, `core/` | under `StateDir` | under `StateDir` | under `StateDir` | `0700` |
+
+The packages add the binaries and a package-owned modules directory, passed to core as
+`--modules-dir`: `/usr/lib/weave/{,modules}` on Linux, `/usr/local/libexec/weave/{,modules}`
+on macOS (`/usr/lib` is SIP-protected there), `%ProgramFiles%\Weave\{,modules}` on Windows.
 
 With `--state-dir <root>` every row is `<root>/<name>` (`run`, `exec`, `logs`, `staging`,
 `modules`). `layout.Ensure` creates each directory and holds it at exactly that mode on every
