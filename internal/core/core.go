@@ -26,6 +26,7 @@ import (
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/policy"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/protocol/handshake"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/protocol/manifest"
+	"github.com/weaveplatform/weaveplatform-agent-core/internal/registry"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/store"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/store/keyprotect"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/supervise"
@@ -156,7 +157,10 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("identity: %w", err)
 	}
 
-	mux := &transport.Mux{Log: log, Queue: st}
+	// The one table of installed modules: the supervisor writes it; transport
+	// delivery, the host channel, RegistryService and ControlService read it.
+	modules := registry.New()
+	mux := &transport.Mux{Log: log, Queue: st, Registry: modules}
 	// The host channel is the only peer: whatever drives this machine from
 	// directly outside it. Core owns the single connection; modules address
 	// PEER_HYPERVISOR and never touch the wire. Runs for the core lifetime.
@@ -184,6 +188,7 @@ func Run(ctx context.Context, opts Options) error {
 		Policy:    policyMgr,
 		Identity:  ident,
 		Transport: mux,
+		Registry:  modules,
 	}
 
 	sup := &supervise.Supervisor{
@@ -193,6 +198,7 @@ func Run(ctx context.Context, opts Options) error {
 		Services: services,
 		Layout:   lay,
 		Verifier: verifier,
+		Registry: modules,
 		// Ask modules to ping every 10s; a module silent for 20s (two
 		// intervals) is restarted as hung. Catches hangs that Health
 		// polling, answered on a separate goroutine, would miss.

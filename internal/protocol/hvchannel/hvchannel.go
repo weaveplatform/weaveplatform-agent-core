@@ -42,10 +42,18 @@ const MaxFrameSize = 512 << 20
 // Data is deliberately opaque here: the feature vocabulary that fills it (the
 // guestwire kinds) is product logic and lives with the modules, not in the
 // platform API.
+//
+// ID is an optional correlation the sender chooses. Core never reads Data, so
+// a reply core makes on a module's behalf — delivery.failed — can only be
+// matched to the host's pending call by something outside Data: core echoes
+// ID on every control reply to a frame that carried one. It is omitted when
+// empty, so a peer built before it existed neither sends nor sees it, and a
+// decoder that does not know the field ignores it.
 type Envelope struct {
 	Module string `json:"module"`
 	Kind   string `json:"kind"`
 	Data   []byte `json:"data,omitempty"`
+	ID     string `json:"id,omitempty"`
 }
 
 // ErrFrameTooLarge reports a frame over MaxFrameSize, written or read.

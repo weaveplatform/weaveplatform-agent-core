@@ -64,6 +64,7 @@ func (f *fakeControl) Modules(
 	return &controlv1.ModulesResponse{Modules: []*controlv1.ModuleStatus{
 		{
 			Id:       "weave-linux-presence",
+			Address:  "weave.presence",
 			Version:  "0.1.0",
 			Protocol: 1,
 			State:    "running",
@@ -176,6 +177,12 @@ func TestModules(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	if len(lines) != 4 || !strings.HasPrefix(lines[0], "MODULE") {
 		t.Fatalf("want header + 3 rows:\n%s", out)
+	}
+	if !strings.Contains(lines[1], "weave.presence") {
+		t.Errorf("row lacks the channel address: %q", lines[1])
+	}
+	if f := strings.Fields(lines[2]); len(f) < 2 || f[1] != "-" {
+		t.Errorf("a module without an address should show '-': %q", lines[2])
 	}
 	if !strings.Contains(lines[1], "STATUS_DEGRADED (slow disk)") ||
 		!strings.Contains(lines[1], "42") {

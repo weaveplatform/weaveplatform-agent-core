@@ -25,6 +25,7 @@ import (
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/eventbus"
 	agentv1 "github.com/weaveplatform/weaveplatform-agent-core/internal/gen/go/weave/agent/v1"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/protocol/handshake"
+	"github.com/weaveplatform/weaveplatform-agent-core/internal/registry"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/werror"
 )
 
@@ -109,6 +110,13 @@ type TransportBackend interface {
 	Receive(ctx context.Context, module string) <-chan *agentv1.TransportMessage
 }
 
+// RegistryBackend is core's installed-module table; *registry.Registry
+// implements it.
+type RegistryBackend interface {
+	List() (revision uint64, modules []registry.Module)
+	Watch(ctx context.Context) <-chan struct{}
+}
+
 // Services aggregates the backends core wires once at startup.
 type Services struct {
 	Log       *slog.Logger
@@ -117,6 +125,8 @@ type Services struct {
 	Policy    PolicyBackend
 	Identity  IdentityBackend
 	Transport TransportBackend
+	// Registry answers RegistryService. Nil answers Unavailable.
+	Registry RegistryBackend
 	// Watchdog, if set, is called with the module id on every watchdog
 	// ping so the supervisor can track liveness. Nil disables the seam.
 	Watchdog func(module string)
@@ -142,6 +152,7 @@ func (s *Services) NewServer(
 	agentv1.RegisterTransportServiceServer(srv, &transportServer{s: s, module: channelAddress})
 	agentv1.RegisterLogServiceServer(srv, &logServer{s: s, module: moduleID})
 	agentv1.RegisterWatchdogServiceServer(srv, &watchdogServer{s: s, module: moduleID})
+	agentv1.RegisterRegistryServiceServer(srv, &registryServer{s: s})
 	return srv
 }
 

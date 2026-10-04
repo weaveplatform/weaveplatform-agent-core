@@ -94,6 +94,8 @@ func (s *Server) Modules(
 			State:    string(st.State),
 			Health:   st.Health,
 			Restarts: st.Restarts,
+			Address:  st.Address,
+			SinceMs:  st.Since.UnixMilli(),
 		}
 		if st.PID > 0 && st.PID <= math.MaxInt32 {
 			ms.Pid = int32(st.PID)

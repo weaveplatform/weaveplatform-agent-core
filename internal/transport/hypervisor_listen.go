@@ -103,6 +103,7 @@ func (m *Mux) serveHypervisor(ctx context.Context, l connListener, auth *channel
 			continue
 		}
 		p := newPeer(rwc, m.Log, m.deliver, auth.fresh())
+		p.modules = m.Registry
 		p.onAuthenticated = m.flushHypervisor
 		p.onClosed = func() { m.clearHypervisor(p) }
 		// Installed before its read loop starts, so a connection that dies at

@@ -69,7 +69,8 @@ is pinned and rolled.
 
 The policy envelope (`schema_version`, `content_type` on `PolicyDocument`), event sequence
 numbers (`sequence` on `Event`), the standard `grpc.health.v1` service, and the push
-`WatchdogService` (plus `watchdog_interval_seconds` on `InitRequest`) were all added under
+`WatchdogService` (plus `watchdog_interval_seconds` on `InitRequest`), and the read-only
+`RegistryService` were all added under
 protocol **1**: new optional fields and new services are wire-compatible, so by the rules
 above they do not bump the integer. A protocol-2 package is minted only when a genuinely
 breaking change lands, at which point `test/protocompat/v2` is added beside `v1`.
@@ -88,6 +89,130 @@ The leading `1` in the stdout line is the *handshake format* version, distinct f
 protocol integer that follows it. A module whose protocol falls outside the advertised window
 must exit with code 78 (EX_CONFIG) before listening; core records "protocol unsupported" and
 does not restart it — refusal is clean, never a crash loop.
+
+## The host channel's control address
+
+The host channel (`internal/protocol/hvchannel`) is a different wire from the module protocol:
+length-prefixed JSON envelopes between core and the host directly outside it. It has no
+version exchange; it changes only additively, and a change lands here and in the SDK's copy
+together ([`protocol-versioning.md`](protocol-versioning.md)).
+
+```json
+{"module": "weave.power", "kind": "weave.power.shutdown", "data": "<base64>", "id": "a1b2c3-7"}
+```
+
+`data` is a JSON byte string, so it is base64 on the wire; core never looks inside it. `id`
+is optional and omitted when empty: a correlation the sender picks. Core echoes it on every
+control frame it sends in reply to a frame that carried one — the auth replies, the refusal of
+an unauthenticated op, `modules.list.result` and `delivery.failed` — and leaves it out of
+unsolicited frames. A host that sends `id` should set it to the same value as the request id
+inside `data` (`weavewire.Command.id`), so one pending-call table matches both a module's reply
+and core's answer on its behalf.
+
+`module: "hvchannel"` addresses the channel itself. It is a reserved id no manifest may take.
+Its kinds:
+
+| Kind | Direction | Before auth | `data` |
+|---|---|---|---|
+| `auth.begin` | host → guest | yes | none |
+| `auth.challenge` | guest → host | yes | `{"nonce": "<base64, 32 bytes>"}` |
+| `auth.response` | host → guest | yes | `{"public_key": "<base64>", "signature": "<base64>"}` |
+| `auth.result` | guest → host | yes | `{"ok": true}` or `{"ok": false, "reason": "..."}` |
+| `modules.list` | host → guest | refused | none |
+| `modules.list.result` | guest → host | never sent | a modules snapshot |
+| `modules.changed` | guest → host | never sent | a modules snapshot |
+| `delivery.failed` | guest → host | never sent | a delivery failure |
+
+"Refused" means what it means for any gated op: the guest answers `auth.result` with
+`ok: false` and reason `channel is not authenticated`, echoing the frame's `id`.
+
+### `modules.list`, `modules.changed`
+
+The registry of installed modules, as one snapshot. `modules.list` asks for it; the answer is
+`modules.list.result` with the request's `id`. After authenticating, the host is also pushed a
+`modules.changed` (no `id`) whenever a module is added or removed or any module's state or
+health changes, for as long as that connection lasts. A host that wants a complete view sends
+`modules.list` after `auth.result` and applies every `modules.changed` after it, keeping the
+snapshot with the higher `revision` — pushes are not queued behind a list answer, so the two
+can arrive in either order.
+
+```json
+{
+  "revision": 7,
+  "modules": [
+    {
+      "id": "weave-linux-power",
+      "version": "1.2.3",
+      "protocol": 1,
+      "address": "weave.power",
+      "capabilities": ["hypervisor.channel"],
+      "privilege": "system",
+      "session": "system",
+      "state": "running",
+      "health": {"status": "healthy"},
+      "restarts": 0,
+      "since": "2026-10-04T12:00:00Z"
+    },
+    {
+      "id": "weave-linux-clipboard",
+      "version": "0.4.0",
+      "protocol": 1,
+      "address": "weave.clipboard",
+      "capabilities": [],
+      "privilege": "user",
+      "session": "per-user-console",
+      "state": "waiting-for-session",
+      "detail": "no console user session",
+      "health": {"status": "unknown"},
+      "restarts": 0,
+      "since": "2026-10-04T11:58:12.031Z"
+    }
+  ]
+}
+```
+
+| Field | |
+|---|---|
+| `revision` | increases with every change for the life of the core process; restarts from 1 with core |
+| `modules` | sorted by `id`; always an array |
+| `id`, `version`, `protocol` | from the manifest; `protocol` is 0 until the module has completed a handshake |
+| `address` | what to put in an envelope's `module` to reach it: the manifest's `address`, or its `id` |
+| `capabilities` | the manifest's required capabilities; always an array |
+| `privilege`, `session` | the manifest's placement |
+| `state` | `pending`, `starting`, `running`, `backoff`, `start-limited`, `unsupported-protocol`, `requirements-unmet`, `waiting-for-session`, `stopped` |
+| `detail` | why it is in that state; omitted when there is nothing to say |
+| `health.status` | `healthy`, `degraded`, `unhealthy`, or `unknown` before the first poll |
+| `health.reason` | the module's own reason; omitted when empty |
+| `restarts` | crash restarts since core started it |
+| `since` | when it entered `state`, RFC 3339 UTC |
+
+A host should treat an unknown `state` or `health.status` as not running / unknown rather
+than failing: the vocabulary may grow.
+
+### `delivery.failed`
+
+Sent in place of silence when core cannot hand an authenticated host's frame to a module, so
+a host can tell a missing module from a slow one without waiting out a timeout.
+
+```json
+{"module": "weave.power", "kind": "weave.power.shutdown", "reason": "not_installed"}
+{"module": "weave.clipboard", "kind": "weave.clipboard.get", "reason": "not_running",
+ "state": "waiting-for-session", "detail": "no console user session"}
+{"module": "weave.exec", "kind": "weave.exec.run", "reason": "busy"}
+```
+
+The envelope is `{"module": "hvchannel", "kind": "delivery.failed", "id": <the frame's id>}`.
+
+| `reason` | Means | Host should |
+|---|---|---|
+| `not_installed` | no module answers to `module` | fail the call; feature-gate |
+| `not_running` | a module answers to it but has no receiver open; `state` (always set) and `detail` say why — `running` here means it is up but has not opened its receive stream yet | fail the call, or wait for a `modules.changed` showing it running and retry |
+| `busy` | the module's inbound queue (64 messages) is full | retry with backoff |
+
+Before authentication nothing changes: a gated op is refused with `auth.result`, and a hello
+for a module that is not there goes unanswered, because which modules a guest has is more than
+the pre-auth exemption is meant to disclose. A frame core does deliver gets no acknowledgement
+from core; the module's own reply is the acknowledgement.
 
 ## Registry
 

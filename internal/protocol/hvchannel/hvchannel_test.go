@@ -3,6 +3,7 @@ package hvchannel
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"io"
 	"testing"
@@ -95,5 +96,38 @@ func TestWriteFrameRefusesOversizedPayload(t *testing.T) {
 			"MaxFrameSize = %d — both ends of the channel agree on 512 MiB",
 			MaxFrameSize,
 		)
+	}
+}
+
+// The correlation id is additive: absent from the bytes when empty, so a peer
+// that predates it sees exactly the envelope it always did, and carried
+// through when set.
+func TestEnvelopeID(t *testing.T) {
+	plain, err := json.Marshal(Envelope{Module: "m", Kind: "k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(plain) != `{"module":"m","kind":"k"}` {
+		t.Fatalf("an envelope without an id encodes as %s", plain)
+	}
+	var buf bytes.Buffer
+	if err := WriteEnvelope(&buf, Envelope{Module: "m", Kind: "k", ID: "c1"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadEnvelope(&buf)
+	if err != nil || got.ID != "c1" {
+		t.Fatalf("round trip = %+v, %v", got, err)
+	}
+	// An old peer's decoder, which knows no id, ignores it.
+	var old struct {
+		Module string `json:"module"`
+		Kind   string `json:"kind"`
+	}
+	if err := json.Unmarshal(
+		[]byte(`{"module":"m","kind":"k","id":"c1"}`),
+		&old,
+	); err != nil ||
+		old.Kind != "k" {
+		t.Fatalf("old decoder: %+v %v", old, err)
 	}
 }

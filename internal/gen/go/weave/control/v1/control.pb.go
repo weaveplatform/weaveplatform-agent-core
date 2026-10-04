@@ -181,12 +181,18 @@ type ModuleStatus struct {
 	Id       string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Version  string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
 	Protocol uint32                 `protobuf:"varint,3,opt,name=protocol,proto3" json:"protocol,omitempty"`
-	// Supervisor state: "running", "starting", "backoff", "breaker",
-	// "unsupported-protocol", "requirements-unmet", "stopped".
-	State         string     `protobuf:"bytes,4,opt,name=state,proto3" json:"state,omitempty"`
-	Health        *v1.Health `protobuf:"bytes,5,opt,name=health,proto3" json:"health,omitempty"`
-	Pid           int32      `protobuf:"varint,6,opt,name=pid,proto3" json:"pid,omitempty"`
-	Restarts      uint32     `protobuf:"varint,7,opt,name=restarts,proto3" json:"restarts,omitempty"`
+	// Lifecycle state, then ": " and the detail when there is one. States:
+	// "pending", "starting", "running", "backoff", "start-limited",
+	// "unsupported-protocol", "requirements-unmet", "waiting-for-session",
+	// "stopped".
+	State    string     `protobuf:"bytes,4,opt,name=state,proto3" json:"state,omitempty"`
+	Health   *v1.Health `protobuf:"bytes,5,opt,name=health,proto3" json:"health,omitempty"`
+	Pid      int32      `protobuf:"varint,6,opt,name=pid,proto3" json:"pid,omitempty"`
+	Restarts uint32     `protobuf:"varint,7,opt,name=restarts,proto3" json:"restarts,omitempty"`
+	// The name the module answers to on the host channel.
+	Address string `protobuf:"bytes,8,opt,name=address,proto3" json:"address,omitempty"`
+	// When the module entered its state, in Unix milliseconds.
+	SinceMs       int64 `protobuf:"varint,9,opt,name=since_ms,json=sinceMs,proto3" json:"since_ms,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -266,6 +272,20 @@ func (x *ModuleStatus) GetPid() int32 {
 func (x *ModuleStatus) GetRestarts() uint32 {
 	if x != nil {
 		return x.Restarts
+	}
+	return 0
+}
+
+func (x *ModuleStatus) GetAddress() string {
+	if x != nil {
+		return x.Address
+	}
+	return ""
+}
+
+func (x *ModuleStatus) GetSinceMs() int64 {
+	if x != nil {
+		return x.SinceMs
 	}
 	return 0
 }
@@ -765,7 +785,7 @@ const file_weave_control_v1_control_proto_rawDesc = "" +
 	"\tdevice_id\x18\x03 \x01(\tR\bdeviceId\x12\x1a\n" +
 	"\benrolled\x18\x04 \x01(\bR\benrolled\x12%\n" +
 	"\x0euptime_seconds\x18\x05 \x01(\x04R\ruptimeSeconds\"\x10\n" +
-	"\x0eModulesRequest\"\xc8\x01\n" +
+	"\x0eModulesRequest\"\xfd\x01\n" +
 	"\fModuleStatus\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x1a\n" +
@@ -773,7 +793,9 @@ const file_weave_control_v1_control_proto_rawDesc = "" +
 	"\x05state\x18\x04 \x01(\tR\x05state\x12.\n" +
 	"\x06health\x18\x05 \x01(\v2\x16.weave.agent.v1.HealthR\x06health\x12\x10\n" +
 	"\x03pid\x18\x06 \x01(\x05R\x03pid\x12\x1a\n" +
-	"\brestarts\x18\a \x01(\rR\brestarts\"K\n" +
+	"\brestarts\x18\a \x01(\rR\brestarts\x12\x18\n" +
+	"\aaddress\x18\b \x01(\tR\aaddress\x12\x19\n" +
+	"\bsince_ms\x18\t \x01(\x03R\asinceMs\"K\n" +
 	"\x0fModulesResponse\x128\n" +
 	"\amodules\x18\x01 \x03(\v2\x1e.weave.control.v1.ModuleStatusR\amodules\"\x11\n" +
 	"\x0fSurfacesRequest\"b\n" +

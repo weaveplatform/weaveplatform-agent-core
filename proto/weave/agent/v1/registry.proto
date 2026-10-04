@@ -1,0 +1,45 @@
+// RegistryService is served by core on the per-module host socket: a
+// read-only view of the modules installed beside the caller, so a module can
+// tell a peer that is missing from one that is merely not running yet. It is
+// scoped to what a module may act on — identity, address, state and health —
+// and leaves out what only an operator needs (process ids, placement).
+
+syntax = "proto3";
+
+package weave.agent.v1;
+
+import "weave/agent/v1/health.proto";
+
+service RegistryService {
+  // List returns the registry now.
+  rpc List(RegistryListRequest) returns (RegistrySnapshot);
+  // Watch streams the registry immediately, then again after every change:
+  // a module added or removed, or a module's state or health changing.
+  // Snapshots coalesce, so a slow reader skips to the latest.
+  rpc Watch(RegistryWatchRequest) returns (stream RegistrySnapshot);
+}
+
+message RegistryListRequest {}
+
+message RegistryWatchRequest {}
+
+message RegistrySnapshot {
+  // Increases with every change for the life of the core process; a reader
+  // that sees two snapshots keeps the higher. Restarts when core does.
+  uint64 revision = 1;
+  // Sorted by id.
+  repeated RegisteredModule modules = 2;
+}
+
+message RegisteredModule {
+  string id = 1;
+  string version = 2;
+  // The name the module answers to on the host channel.
+  string address = 3;
+  // Lifecycle state: "pending", "starting", "running", "backoff",
+  // "start-limited", "unsupported-protocol", "requirements-unmet",
+  // "waiting-for-session", "stopped".
+  string state = 4;
+  // The last health report; unset until the module has been polled.
+  Health health = 5;
+}

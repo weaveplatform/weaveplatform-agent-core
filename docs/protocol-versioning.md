@@ -15,6 +15,24 @@ run ([`decisions/0001`](decisions/0001-core-owns-its-protocol.md)).
 Additive changes do not need any of this. A new optional field, a new RPC or a new service
 lands in the current package under the current integer, gated by `buf breaking`.
 
+`RegistryService` (`weave/agent/v1/registry.proto`) is an example. It is a new service, so a
+module built before it never calls it and is unaffected, and a module built after it that
+runs under an older core gets `Unimplemented` from that core's gRPC server — the module
+decides whether that matters, the way it would for any optional dependency. The `address` and
+`since_ms` fields on `control.v1.ModuleStatus` are new optional fields. Neither moves the
+integer, and `buf breaking` against `main` passes.
+
+The host channel's additions in the same change follow the channel's own rule — new fields are
+optional and omitted when empty, new kinds are ignored by a peer that does not know them:
+
+- `id` on the envelope is `omitempty`. An old host never sends it and never sees it; an old
+  host's decoder ignores it if it does arrive.
+- `modules.list`, `modules.list.result`, `modules.changed` and `delivery.failed` are new kinds
+  on the reserved `hvchannel` address. An old core logs `modules.list` as an unknown control
+  frame and answers nothing, so a host that asks must bound the wait and treat silence as
+  "this core has no registry". An old host's read loop already drops control frames it does
+  not wait on.
+
 ## 1. New proto package in core
 
 The protocol is defined by the `.proto` files under `proto/` in this repository. Copy

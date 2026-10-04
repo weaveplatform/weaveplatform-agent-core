@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,6 +23,7 @@ import (
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/layout"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/protocol/handshake"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/protocol/manifest"
+	"github.com/weaveplatform/weaveplatform-agent-core/internal/registry"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/retry"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/session"
 )
@@ -85,6 +87,10 @@ type Supervisor struct {
 	// modules run in. Nil gets a watcher over the platform source, started
 	// on the run-lifetime context the first time a per-user module needs it.
 	Sessions SessionWatcher
+	// Registry is where the supervisor records every module it holds, for
+	// core's other components and its callers to read. Nil gets a private
+	// one, reachable through Modules.
+	Registry *registry.Registry
 
 	// baseCtx is the run-lifetime context every runner derives from. It
 	// is deliberately NOT the caller's context on Add/Replace: an install
@@ -96,6 +102,16 @@ type Supervisor struct {
 	mu      sync.Mutex
 	runners map[string]*runner
 	watcher SessionWatcher
+}
+
+// Modules returns the registry the supervisor records into.
+func (s *Supervisor) Modules() *registry.Registry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Registry == nil {
+		s.Registry = registry.New()
+	}
+	return s.Registry
 }
 
 // SessionWatcher is the supervisor's view of the console session;
@@ -235,9 +251,13 @@ func (s *Supervisor) Add(spec Spec) error {
 				spec.Manifest.ID, addr, errAddressTaken, id)
 		}
 	}
+	if s.Registry == nil {
+		s.Registry = registry.New()
+	}
 	runCtx, cancel := context.WithCancel(s.baseCtx)
 	r := &runner{
 		sup:    s,
+		reg:    s.Registry,
 		spec:   spec,
 		log:    s.Log.With("module", spec.Manifest.ID),
 		state:  StatePending,
@@ -246,6 +266,9 @@ func (s *Supervisor) Add(spec Spec) error {
 	}
 	s.runners[spec.Manifest.ID] = r
 	s.mu.Unlock()
+	r.mu.Lock()
+	r.publishLocked()
+	r.mu.Unlock()
 
 	if err := placementError(spec.Manifest); err != nil {
 		r.setState(StateRequirementsUnmet, err.Error())
@@ -280,6 +303,9 @@ func (s *Supervisor) StopModule(id string) {
 	}
 	r.cancel()
 	r.wg.Wait()
+	// After the runner has finished, not before: its last state change
+	// would otherwise put the entry straight back.
+	r.reg.Remove(id)
 }
 
 // Replace hot-swaps a module: the old process drains and stops, then the
@@ -304,18 +330,9 @@ func (s *Supervisor) SweepOrphans() {
 	}
 }
 
-// Statuses snapshots every registered module.
+// Statuses snapshots every registered module, sorted by id.
 func (s *Supervisor) Statuses() []Status {
-	s.mu.Lock()
-	runners := make([]*runner, 0, len(s.runners))
-	for _, r := range s.runners {
-		runners = append(runners, r)
-	}
-	s.mu.Unlock()
-	out := make([]Status, 0, len(runners))
-	for _, r := range runners {
-		out = append(out, r.status())
-	}
+	_, out := s.Modules().List()
 	return out
 }
 
@@ -335,6 +352,7 @@ func (s *Supervisor) Wait() {
 // runner is one module's supervision loop.
 type runner struct {
 	sup    *Supervisor
+	reg    *registry.Registry
 	spec   Spec
 	log    *slog.Logger
 	wg     sync.WaitGroup
@@ -361,24 +379,31 @@ func (r *runner) setState(st State, detail string) {
 	r.state = st
 	r.detail = detail
 	r.since = time.Now()
+	r.publishLocked()
 	r.mu.Unlock()
 }
 
-func (r *runner) status() Status {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return Status{
-		ID:       r.spec.Manifest.ID,
-		Version:  r.spec.Manifest.Version,
-		Protocol: r.protocol,
-		State:    r.state,
-		Detail:   r.detail,
-		PID:      r.pid,
-		Restarts: r.restarts,
-		Health:   r.health,
-		Since:    r.since,
-		Surfaces: r.surfaces,
-	}
+// publishLocked records the runner's current state in the registry. Called
+// under r.mu so two changes cannot reach the registry in the opposite order
+// to the one they happened in.
+func (r *runner) publishLocked() {
+	m := r.spec.Manifest
+	r.reg.Set(Status{
+		ID:           m.ID,
+		Version:      m.Version,
+		Protocol:     r.protocol,
+		Address:      m.ChannelAddress(),
+		Capabilities: slices.Clone(m.Capabilities),
+		Privilege:    m.Privilege,
+		Session:      m.Session,
+		State:        r.state,
+		Detail:       r.detail,
+		PID:          r.pid,
+		Restarts:     r.restarts,
+		Health:       r.health,
+		Since:        r.since,
+		Surfaces:     r.surfaces,
+	})
 }
 
 // placementError refuses manifests whose session and privilege the
@@ -570,6 +595,7 @@ func (r *runner) superviseIn(
 		crashes = pruned
 		r.mu.Lock()
 		r.restarts++
+		r.publishLocked()
 		r.mu.Unlock()
 		if len(crashes) >= r.sup.startLimitBurst() {
 			r.setState(StateStartLimited, "start limit reached: restarts exhausted")
@@ -663,6 +689,7 @@ func (r *runner) pollHealth(ctx context.Context, p *proc, strikes *int) (restart
 		h := resp.GetHealth()
 		r.mu.Lock()
 		r.health = h
+		r.publishLocked()
 		r.mu.Unlock()
 		switch h.GetStatus() {
 		case agentv1.Health_STATUS_UNHEALTHY:

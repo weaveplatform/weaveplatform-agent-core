@@ -95,7 +95,7 @@ func run(argv []string, stdout, stderr io.Writer) int {
 			return fatal("modules: %v", err)
 		}
 		w := tabwriter.NewWriter(stdout, 2, 4, 2, ' ', 0)
-		fmt.Fprintln(w, "MODULE\tVERSION\tPROTO\tSTATE\tPID\tRESTARTS\tHEALTH")
+		fmt.Fprintln(w, "MODULE\tADDRESS\tVERSION\tPROTO\tSTATE\tPID\tRESTARTS\tHEALTH")
 		for _, m := range resp.GetModules() {
 			health := "-"
 			if h := m.GetHealth(); h != nil {
@@ -104,8 +104,12 @@ func run(argv []string, stdout, stderr io.Writer) int {
 					health += " (" + r + ")"
 				}
 			}
-			fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%d\t%d\t%s\n",
-				m.GetId(), m.GetVersion(), m.GetProtocol(), m.GetState(),
+			address := m.GetAddress()
+			if address == "" {
+				address = "-"
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%d\t%d\t%s\n",
+				m.GetId(), address, m.GetVersion(), m.GetProtocol(), m.GetState(),
 				m.GetPid(), m.GetRestarts(), health)
 		}
 		w.Flush()
