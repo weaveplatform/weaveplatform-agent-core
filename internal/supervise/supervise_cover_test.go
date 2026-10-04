@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -256,6 +257,9 @@ func TestLaunchFailures(t *testing.T) {
 	}
 }
 
+// A binary that is not there fails the launch, naming it. Where it fails
+// differs: exec on unix, staging the copy on Windows, which stages every
+// module (stageBinary).
 func TestLaunchExecFailure(t *testing.T) {
 	sup, logs, _ := capturingSupervisor(t)
 	if err := sup.Add(
@@ -263,7 +267,12 @@ func TestLaunchExecFailure(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	waitLog(t, logs, "exec:", 10*time.Second)
+	want := "exec:"
+	if runtime.GOOS == "windows" {
+		want = "staging binary: opening module binary"
+	}
+	waitLog(t, logs, want, 10*time.Second)
+	waitLog(t, logs, "absent"+exeSuffix(), 10*time.Second)
 }
 
 // Core stopping while a launch is still waiting on the handshake ends the
