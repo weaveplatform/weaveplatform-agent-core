@@ -183,7 +183,7 @@ func TestNewChannelAuthDefaultPath(t *testing.T) {
 		t.Fatalf("default key path not consulted:\n%s", logs)
 	}
 	// Test hosts are not provisioned guests; unless one is, nothing is trusted.
-	if _, err := os.Stat(DefaultChannelKeyPath()); err != nil && a.trusted != nil {
+	if _, err := os.Stat(DefaultChannelKeyPath()); err != nil && a.anchor.get() != nil {
 		t.Fatal("trusted a key that does not exist")
 	}
 }

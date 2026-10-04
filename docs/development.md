@@ -124,7 +124,8 @@ which needs every job below:
 | Unit tests (Linux, macOS, Windows) | `go vet` and `make test`: race detector, shuffled order, coverage |
 | Lint (Linux, macOS, Windows) | golangci-lint with `.golangci.yml`, blocking at zero issues, on each OS so each OS's files are linted |
 | govulncheck | no known vulnerability reachable as linux, darwin or windows |
-| Cross-compile | every `cmd/*` binary for six platforms, CGO disabled; `go.mod` and `go.sum` tidy |
+| Cross-compile | every `cmd/*` binary for six platforms, CGO disabled; `go.mod` and `go.sum` tidy; shellcheck on the macOS package scripts |
+| macOS package | `make package-test-darwin` on a macOS runner: the plist, `postinstall` run dry against a stand-in `dscl`, the uninstaller, and the built `.pkg`'s payload, owners and modes — nothing installed |
 | Protocol | `buf lint`; `buf breaking` against the base branch; `internal/gen` matches `proto/` |
 | Core never depends on weaveplatform-agent-modules | `go list -deps -test ./...` as each OS, and `go list -m all`, reach nothing under `weaveplatform-agent-modules` |
 | Coverage gate | the three OS profiles merged; >=95% total, >=90% per package (`.testcoverage.yml`) |
@@ -146,7 +147,10 @@ Releases are automatic. Conventional commits accumulate on `main`; release-pleas
 merging it tags `vX.Y.Z` and creates the GitHub release. The tag runs `release.yml`, which
 runs goreleaser: binaries for linux, darwin and windows on amd64 and arm64, one archive per
 platform carrying `weaveboot`, `weave-agent`, `weavectl` and `weavemanifest`, the
-`weave-agent` `.deb`, and a checksum file signed keylessly with cosign. Before 1.0, `feat:`
+`weave-agent` `.deb`, and a checksum file signed keylessly with cosign. A second job on a
+macOS runner then verifies the darwin/arm64 archive against that checksum file, builds
+`weave-agent_<version>_darwin_arm64.pkg` from it with `pkgbuild`, signs it keylessly
+(`.pkg.sigstore.json`) and attaches both ([`macos-package.md`](macos-package.md)). Before 1.0, `feat:`
 bumps the minor version and `fix:` the patch; `ci:`, `docs:` and `chore:` do not release.
 
 There is one component, at the repository root, tagged plain `vX.Y.Z`.

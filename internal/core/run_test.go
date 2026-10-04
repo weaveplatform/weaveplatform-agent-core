@@ -23,9 +23,11 @@ import (
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/identity"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/layout"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/protocol/manifest"
+	"github.com/weaveplatform/weaveplatform-agent-core/internal/provision"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/store"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/store/keyprotect"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/supervise"
+	"github.com/weaveplatform/weaveplatform-agent-core/internal/transport"
 )
 
 func exe(name string) string {
@@ -77,15 +79,19 @@ func stateDir(t *testing.T) string {
 // whether the test host is itself a VM guest cannot change the run.
 func isolate(t *testing.T, caps capability.Set) {
 	t.Helper()
-	oldProbe, oldAddr := probeCapabilities, controlAddr
+	oldProbe, oldAddr, oldProv := probeCapabilities, controlAddr, provisionAnchor
 	probeCapabilities = func(capability.Channel) capability.Set { return caps }
+	// A test core never installs a trust anchor on the machine running it.
+	provisionAnchor = func(context.Context, *slog.Logger, string) {}
 	controlAddr = func(l layout.Layout) string {
 		if runtime.GOOS == "windows" {
 			return `\\.\pipe\weave-core-test-` + filepath.Base(l.StateDir)
 		}
 		return l.ControlSocket()
 	}
-	t.Cleanup(func() { probeCapabilities, controlAddr = oldProbe, oldAddr })
+	t.Cleanup(
+		func() { probeCapabilities, controlAddr, provisionAnchor = oldProbe, oldAddr, oldProv },
+	)
 }
 
 func baseCaps() capability.Set {
@@ -796,5 +802,48 @@ func TestReloadFails(t *testing.T) {
 	h.rec.dir = filepath.Join(h.dir, "bad\x00dir")
 	if _, err := h.rec.reload(context.Background()); err == nil {
 		t.Fatal("reload of an unreadable directory answered")
+	}
+}
+
+// Core installs the channel anchor from a provisioning volume before the
+// channel loads it, at --channel-pub when given and the platform path when not.
+func TestRunProvisionsTheChannelAnchor(t *testing.T) {
+	vol := t.TempDir()
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(vol, "weave", "channel.pub"), base64.StdEncoding.EncodeToString(pub))
+	var asked []string
+	fromVolume := func(ctx context.Context, log *slog.Logger, anchor string) {
+		asked = append(asked, anchor)
+		if anchor == transport.DefaultChannelKeyPath() {
+			return // never touch the real one
+		}
+		(&provision.Provisioner{Log: log, AnchorPath: anchor, Volumes: func() ([]string, error) {
+			return []string{vol}, nil
+		}}).Start(ctx)
+	}
+
+	anchor := filepath.Join(t.TempDir(), "weave", "channel.pub")
+	for _, path := range []string{anchor, ""} {
+		isolate(t, baseCaps())
+		provisionAnchor = fromVolume
+		if err := runUntilReady(
+			t,
+			Options{StateDir: stateDir(t), ChannelPubPath: path},
+		); err != nil {
+			t.Fatalf("Run = %v", err)
+		}
+	}
+	if len(asked) != 2 || asked[0] != anchor || asked[1] != transport.DefaultChannelKeyPath() {
+		t.Fatalf("provisioned %q", asked)
+	}
+	raw, err := os.ReadFile(anchor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := transport.ParseChannelKey(raw); err != nil || !got.Equal(pub) {
+		t.Fatalf("anchor holds %q", raw)
 	}
 }

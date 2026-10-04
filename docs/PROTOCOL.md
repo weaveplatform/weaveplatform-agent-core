@@ -126,6 +126,35 @@ Its kinds:
 "Refused" means what it means for any gated op: the guest answers `auth.result` with
 `ok: false` and reason `channel is not authenticated`, echoing the frame's `id`.
 
+### Provisioning the channel key
+
+The key a host must prove (`auth.response`) is never set over this channel: no kind changes it,
+before or after authentication. It reaches the guest out of band, from media the host
+supplies before the guest can talk to anyone, by one of:
+
+- **the image** — baked in at build time;
+- **a cloud-init seed** (Linux guests) — `packaging/cloudinit`;
+- **a provisioning volume** (macOS and Windows guests, which have no cloud-init) — a
+  read-only filesystem labelled `WEAVEPROV` that the host attaches, holding one file:
+
+  ```
+  weave/channel.pub     one standard-base64 Ed25519 public key (32 bytes), newline optional
+  ```
+
+  At start, and only while no key is installed, core copies it to the platform path —
+  `/etc/weave/channel.pub` on macOS and Linux, `%ProgramData%\weave\channel.pub` on
+  Windows — and the channel authenticates against it. A volume that appears after core
+  started is looked for every 2 seconds for 3 minutes. Where core looks for the volume:
+  `/Volumes/WEAVEPROV` on macOS, which must be a read-only mount made by the system; the
+  drive whose volume label is `WEAVEPROV` and is read-only on Windows; an already-mounted
+  read-only filesystem with that label (`/dev/disk/by-label/WEAVEPROV`) on Linux.
+
+All three are the same trust class: host-supplied boot media. An installed key is never
+replaced by any of them — not by a later volume, and not by a key written over the file
+while core runs. Changing it means removing it in the guest (what `weave seal` does before a
+template is cloned) and booting with new media. Core logs the key it trusts by fingerprint,
+`sha256:<hex SHA-256 of the 32 key bytes>`; on the host, `base64 -d channel.pub | shasum -a 256`.
+
 ### `modules.list`, `modules.changed`
 
 The registry of installed modules, as one snapshot. `modules.list` asks for it; the answer is

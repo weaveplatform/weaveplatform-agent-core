@@ -121,7 +121,28 @@ PACKAGE_TEST_IMAGE ?= ubuntu:24.04
 package-test:
 	docker run --rm -v "$(CURDIR)/packaging/linux:/pkg:ro" $(PACKAGE_TEST_IMAGE) sh /pkg/postinstall_test.sh
 
+## pkg-darwin: build the macOS installer package (darwin/arm64) into dist/ (needs macOS: pkgbuild)
+PKG_VERSION ?= $(patsubst v%,%,$(VERSION))
+DARWIN_BIN := $(BIN_DIR)/darwin-arm64
+pkg-darwin: darwin-bin
+	sh packaging/darwin/build-pkg.sh $(PKG_VERSION) $(DARWIN_BIN) dist
+
+darwin-bin:
+	@mkdir -p $(DARWIN_BIN)
+	@for c in weaveboot weave-agent weavectl weavemanifest; do \
+		CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GO) build -trimpath -ldflags "$(LDFLAGS)" \
+			-o $(DARWIN_BIN)/$$c ./cmd/$$c || exit 1; \
+	done
+
+## package-test-darwin: the plist, a postinstall dry run, uninstall and the built package's payload (needs macOS; installs nothing)
+package-test-darwin: darwin-bin
+	sh packaging/darwin/package_test.sh $(DARWIN_BIN)
+
+## shellcheck: the macOS package scripts
+shellcheck:
+	shellcheck -s sh packaging/darwin/*.sh packaging/darwin/scripts/preinstall packaging/darwin/scripts/postinstall
+
 ## gate: everything CI runs, in order
 gate: vet lint test cover vuln build tidy-check buf-lint gen-check core-independent
 
-.PHONY: help fmt lint vet test cover vuln build tidy-check protoc-plugins buf-lint gen gen-check core-independent fuzz snapshot package-test gate
+.PHONY: help fmt lint vet test cover vuln build tidy-check protoc-plugins buf-lint gen gen-check core-independent fuzz snapshot package-test pkg-darwin darwin-bin package-test-darwin shellcheck gate

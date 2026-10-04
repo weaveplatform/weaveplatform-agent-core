@@ -197,6 +197,10 @@ release:
     Binaries are pure Go (Zone A) and require no runtime dependencies. Each
     archive carries `weaveboot`, `weave-agent` and `weavectl` for one platform;
     the Windows zips add `install.ps1`, the unattended installer.
+    `weave-agent_{{ .Version }}_darwin_arm64.pkg` (attached a few minutes after
+    the rest, unsigned) installs the agent in a macOS guest with
+    `sudo installer -pkg … -target /`; verify it against its own
+    `.sigstore.json` bundle the same way as the checksum file below.
 
     Verify a download against the signed checksum file:
 

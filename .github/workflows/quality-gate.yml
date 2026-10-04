@@ -156,6 +156,33 @@ jobs:
       - name: go.mod and go.sum are tidy
         run: make tidy-check
 
+      - name: shellcheck the macOS package scripts
+        run: make shellcheck
+
+  darwin-package:
+    name: 'macOS package (built and inspected, not installed)'
+    runs-on: macos-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - name: Check Out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+
+      # The plist, postinstall run dry against a stand-in dscl, uninstall, and
+      # pkgbuild's payload checked file by file. Nothing is installed.
+      - name: Package test
+        run: make package-test-darwin
+
   protocol:
     name: 'Protocol (buf lint, breaking, generated code)'
     runs-on: ubuntu-latest
@@ -268,7 +295,7 @@ jobs:
   gate:
     name: 'Quality gate'
     if: always()
-    needs: [unit, lint, vuln, build, protocol, core-independent, coverage]
+    needs: [unit, lint, vuln, build, darwin-package, protocol, core-independent, coverage]
     runs-on: ubuntu-latest
     steps:
       - name: Every gate job passed

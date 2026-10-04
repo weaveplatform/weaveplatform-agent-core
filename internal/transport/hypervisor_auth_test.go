@@ -277,3 +277,73 @@ func TestGuestWithNoKeyAuthenticatesNobody(t *testing.T) {
 		t.Fatal("a guest with no trusted key admitted a caller")
 	}
 }
+
+// authenticate runs the handshake with priv and reports whether it was admitted.
+func authenticate(
+	t *testing.T,
+	hostR *bufio.Reader,
+	hostW *bufio.Writer,
+	priv ed25519.PrivateKey,
+) bool {
+	t.Helper()
+	send(t, hostW, hvchannel.ControlModule, hvchannel.KindAuthBegin, nil)
+	var challenge hvchannel.AuthChallenge
+	if err := json.Unmarshal(readEnvelope(t, hostR).Data, &challenge); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := hvchannel.Sign(priv, challenge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	send(t, hostW, hvchannel.ControlModule, hvchannel.KindAuthResponse, resp)
+	var result hvchannel.AuthResult
+	if err := json.Unmarshal(readEnvelope(t, hostR).Data, &result); err != nil {
+		t.Fatal(err)
+	}
+	return result.OK
+}
+
+// A guest that came up with no anchor picks one up when it is installed later
+// (boot media mounted after core started), and from then on keeps it: a key
+// written over the file afterwards is not adopted by the running core.
+func TestAnchorInstalledLateIsLoadedThenFixed(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	otherPub, otherPriv, _ := ed25519.GenerateKey(rand.Reader)
+	path := filepath.Join(t.TempDir(), "channel.pub")
+
+	_, hostR, hostW := guestEnd(t, path)
+	if authenticate(t, hostR, hostW, priv) {
+		t.Fatal("admitted a caller before any anchor existed")
+	}
+	if err := os.WriteFile(
+		path,
+		[]byte(base64.StdEncoding.EncodeToString(pub)+"\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if !authenticate(t, hostR, hostW, priv) {
+		t.Fatal("the late anchor was not loaded")
+	}
+	if err := os.WriteFile(
+		path,
+		[]byte(base64.StdEncoding.EncodeToString(otherPub)+"\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if authenticate(t, hostR, hostW, otherPriv) {
+		t.Fatal("a key written over the loaded anchor was adopted")
+	}
+}
+
+func TestKeyFingerprint(t *testing.T) {
+	// SHA-256 of 32 zero bytes.
+	want := "sha256:66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925"
+	if got := KeyFingerprint(make(ed25519.PublicKey, ed25519.PublicKeySize)); got != want {
+		t.Fatalf("KeyFingerprint = %s", got)
+	}
+	if (*trustAnchor)(nil).get() != nil {
+		t.Fatal("a nil anchor trusted something")
+	}
+}

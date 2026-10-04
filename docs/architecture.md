@@ -85,7 +85,8 @@ flowchart TD
 ```
 
 The init system owns weaveboot and nothing else, on every platform: a systemd unit
-(`packaging/linux/weave-agent.service`), a launchd plist, and on Windows the `WeaveAgent`
+(`packaging/linux/weave-agent.service`), the launchd daemon `run.weaveplatform.agent`
+(`packaging/darwin`, [`macos-package.md`](macos-package.md)), and on Windows the `WeaveAgent`
 service — LocalSystem, automatic start, restart on any failure — which `weaveboot service
 install` registers ([`windows-install.md`](windows-install.md)). Under the SCM weaveboot runs
 the service control dispatcher and turns Stop / PreShutdown into the same context cancel a
@@ -232,22 +233,37 @@ must not be read as "nothing installed" and stop every module.
 
 **Four triggers, one pass.** All of them end in the same reconcile:
 
-- **the directory watch** — inotify on Linux, on the modules directory and each module
-  directory in it, following directories as they come and go;
-- **SIGHUP** to weave-agent — `systemctl reload weave-agent` (`ExecReload`) signals weaveboot,
-  systemd's main pid, which forwards it to core;
+- **the directory watch** — on the modules directory and each module directory in it,
+  following directories as they come and go: inotify on Linux, kqueue on macOS (below);
+- **SIGHUP** to weave-agent — `systemctl reload weave-agent` (`ExecReload`) on Linux and
+  `launchctl kill HUP system/run.weaveplatform.agent` on macOS signal weaveboot, the service
+  manager's main process, which forwards it to core;
 - **`ControlService.Reload`** — `weavectl reload`, which answers with what the pass did:
   modules added, removed and replaced, and every module still invalid;
 - **the periodic rescan** — `--module-rescan` / `WEAVE_MODULE_RESCAN`, default one minute,
-  `0` to disable: the safety net for a change nothing reported, and for macOS and Windows,
-  which have no watch yet.
+  `0` to disable: the safety net for a change nothing reported, and for Windows, which has
+  no watch yet.
+
+**The macOS watch** (`internal/core/watch_darwin.go`) is kqueue `EVFILT_VNODE`. kqueue watches
+vnodes rather than names, and a directory's event says only that its entries changed, so the
+watch keeps a snapshot of each entry's name and inode in the modules directory and in each
+module directory, and a directory event counts only when that snapshot changed: an entry
+appeared, went, or was replaced by a rename (a new inode under the same name — the lifecycle
+manager's `current` flip, a binary swapped into place). The regular files directly in a module
+directory are watched as well, for a write in place, which changes no directory. Deeper levels
+(`versions/<v>/`) are not watched, as on Linux: a lifecycle install flips `current` last, and
+the rescan covers anything else. Each watched path holds one descriptor, opened `O_EVTONLY` so
+it never keeps a volume from unmounting.
 
 Passes are serialised, and the watch and SIGHUP go through a debounce: a trigger waits for
 half a second of quiet (and never more than five seconds in all), so a package's burst of
 file events is one pass. `weavectl reload` runs a pass at once and waits for its answer.
 
 **Never a half-written binary.** dpkg writes each file as `<name>.dpkg-new` and renames it
-into place, and the rename is atomic; the watch ignores `*.dpkg-*` names, and discovery only
+into place, and the rename is atomic; the watch ignores `*.dpkg-*` names (and on macOS every
+dot-name too: the lifecycle manager's `.tmp-*` staging, AppleDouble `._*` files, `.DS_Store`
+and any installer's hidden staging — the macOS installer itself stages in a sandbox outside the
+destination and moves finished files in), and discovery only
 ever opens the module's own file names. For anything that writes a binary in place, a pass
 hashes the binary between two `stat`s and, if it changed while being read, leaves that
 module alone and looks again after the debounce.
@@ -444,6 +460,10 @@ log directories are `/var/lib/weave/run` and `/var/lib/weave/logs`, not the plat
 | `LogDir` | `/var/log/weave` | `/Library/Logs/Weave` | `StateDir\logs` | `0700` |
 | `StagingDir`, `ModulesDir`, `core/` | under `StateDir` | under `StateDir` | under `StateDir` | `0700` |
 
+The packages add the binaries and a package-owned modules directory, passed to core as
+`--modules-dir`: `/usr/lib/weave/{,modules}` on Linux, `/usr/local/libexec/weave/{,modules}`
+on macOS (`/usr/lib` is SIP-protected there), `%ProgramFiles%\Weave\{,modules}` on Windows.
+
 With `--state-dir <root>` every row is `<root>/<name>` (`run`, `exec`, `logs`, `staging`,
 `modules`). `layout.Ensure` creates each directory and holds it at exactly that mode on every
 start, in both directions: it closes a `0755` left by an installer and opens a `0700` left by
@@ -491,6 +511,7 @@ user:
 | `internal/policy` | read the local policy file on change, cache the last good document in the store, wake Watch streams on change ([Policy](#policy)) |
 | `internal/identity` | Ed25519 device identity behind a Provider seam, local to the machine; per-module scoped credentials (fail closed today) |
 | `internal/transport` | the host channel peer, durable offline queue |
+| `internal/provision` | the channel trust anchor from a `WEAVEPROV` provisioning volume, only while none is installed ([Authentication](#authentication)) |
 | `internal/lifecycle` | staged install, health-gated promote, N-1 retention, rollback |
 | `internal/manifestverify` | two-tier Ed25519 chain verification for channel manifests |
 | `internal/capability` | the one host probe at startup that gates module launch |
@@ -646,13 +667,51 @@ off, run a command in it, read its inventory — so the channel authenticates it
 peer before honouring any of that. Without it the boundary is "whoever got to the
 file descriptor first", which is not a boundary.
 
-The guest holds an Ed25519 public key placed in its image at build time
-(`/etc/weave/channel.pub`, or `--channel-pub`); the host holds the private half in
-the VM's directory. The guest issues a single-use nonce, the host signs it, the
+The guest holds an Ed25519 public key (`/etc/weave/channel.pub`,
+`%ProgramData%\weave\channel.pub` on Windows, or `--channel-pub`); the host holds the
+private half in the VM's directory. The guest issues a single-use nonce, the host signs it, the
 guest checks the signature against the key it already trusts. The frames and the
 signing message live in `internal/protocol/hvchannel` (and the module SDK's copy) for the same
 reason the framing does: both ends must build them identically and nothing on this wire would
 catch a mismatch.
+
+**The key — the trust anchor — only ever arrives out of band**, from boot media the host
+supplies: baked into the image, written by a cloud-init seed (Linux), or copied from a
+provisioning volume (macOS and Windows, which have no cloud-init). Nothing on the channel
+sets or changes it, authenticated or not. An in-band rekey was considered and rejected: a
+stolen key could use it to persist and lock the owner out, and it would put a trust-changing
+operation on the one wire an attacker on the host can reach.
+
+**The provisioning volume** (`internal/provision`) is a read-only filesystem labelled
+`WEAVEPROV` holding `weave/channel.pub`. At start, before the channel loads its key, and
+**only if nothing is at the anchor path**, core reads the key, validates it exactly as the
+channel loads keys (one standard-base64 Ed25519 key), and installs it: written in full to a
+temporary sibling, made `0644` root (on Windows a protected ACL: SYSTEM and Administrators
+full, Users read), then hard-linked into place. A link, unlike a rename, fails if the anchor
+exists, so even an anchor that appeared a moment earlier is never replaced, and the anchor
+never exists half-written. Core logs the key's fingerprint (`sha256:` and the hex SHA-256 of
+the 32 key bytes).
+
+- **Anything at the anchor path ends it**, valid key or not; the volume is not read. A guest
+  whose anchor is wrong is fixed by whoever administers it, not by media.
+- **Where it looks.** macOS: `/Volumes/WEAVEPROV`, which must be the root of a read-only
+  mount made by the system (statfs: the mount point, `MNT_RDONLY`, owner uid 0) — a directory
+  someone made, or a disk image a user attached with `hdiutil`, is refused. Windows: the drive
+  whose volume label is `WEAVEPROV`, read-only (`FILE_READ_ONLY_VOLUME`). Linux: a filesystem
+  udev lists under `/dev/disk/by-label/WEAVEPROV` that is already mounted read-only; core does
+  not mount it, since Linux guests have cloud-init. Two such volumes are refused rather than
+  chosen between. The host must attach the volume read-only.
+- **A volume mounted late.** macOS mounts an attached disk some seconds into boot, often after
+  core has started. If there is neither an anchor nor a volume at start, core looks again every
+  2 seconds for 3 minutes, then stops for good: an unprovisioned guest is a legitimate state
+  and is not polled for. The channel, which found no key, reads the anchor path again when a
+  host next authenticates, keeps the first key it finds, and never replaces it while it runs.
+- **A key it will not trust** (not base64, not 32 bytes, over 4 KiB, a symlink, missing) is
+  logged and provisioning stops; the channel stays closed, as for any unprovisioned guest.
+
+What this does not defend against: an administrator in the guest, who can write the anchor
+directly; and, during the minutes before an unprovisioned guest's anchor is installed, a
+process that can mount a filesystem as root. Both already control the guest.
 
 Scope is **per VM**, not per host. A process able to drive VM A therefore cannot
 drive VM B, which one host-wide key would have allowed the moment it leaked.

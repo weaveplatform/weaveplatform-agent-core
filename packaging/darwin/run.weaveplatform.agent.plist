@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd owns weaveboot and nothing else; weaveboot supervises core, core
+  supervises modules. Do not point this at weave-agent: the in-place core
+  replace (stage, health-gate, roll back) is weaveboot's job.
+  docs/macos-package.md explains each key.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>run.weaveplatform.agent</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/libexec/weave/weaveboot</string>
+		<string>--</string>
+		<string>--modules-dir</string>
+		<string>/usr/local/libexec/weave/modules</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ExitTimeOut</key>
+	<integer>30</integer>
+	<key>StandardOutPath</key>
+	<string>/Library/Logs/Weave/weave-agent.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Library/Logs/Weave/weave-agent.log</string>
+</dict>
+</plist>

@@ -2,23 +2,14 @@ package core
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
-
-// watchRetry is how long the watch waits before trying again when the modules
-// directory is missing or the watch fails; the periodic rescan covers the gap.
-var watchRetry = 5 * time.Second
-
-var errWatchRootGone = errors.New("modules directory removed or moved")
 
 // The events that can change what a module directory holds. IN_CLOSE_WRITE
 // rather than IN_MODIFY: one event per finished write, not one per write(2)
@@ -26,31 +17,6 @@ var errWatchRootGone = errors.New("modules directory removed or moved")
 // markers) land a finished file.
 const watchMask = unix.IN_CREATE | unix.IN_DELETE | unix.IN_MOVED_FROM | unix.IN_MOVED_TO |
 	unix.IN_CLOSE_WRITE | unix.IN_ATTRIB | unix.IN_DELETE_SELF | unix.IN_MOVE_SELF | unix.IN_ONLYDIR
-
-// watchModules calls notify for every change inotify reports in dir or in any
-// module directory directly under it, until ctx ends. notify is the reload
-// trigger, which debounces: a package install's burst of events is one pass.
-func watchModules(ctx context.Context, log *slog.Logger, dir string, notify func()) {
-	logged := false
-	for ctx.Err() == nil {
-		err := watchOnce(ctx, dir, notify)
-		if ctx.Err() != nil {
-			return
-		}
-		// Whatever ended the watch may itself be a change (the directory
-		// went away, or came back).
-		notify()
-		if !logged {
-			log.Warn("module directory watch unavailable; retrying", "dir", dir, "err", err)
-			logged = true
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(watchRetry):
-		}
-	}
-}
 
 func watchOnce(ctx context.Context, dir string, notify func()) error {
 	fd, err := unix.InotifyInit1(unix.IN_CLOEXEC | unix.IN_NONBLOCK)
