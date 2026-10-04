@@ -1,6 +1,25 @@
 #!/bin/sh
-# Enable and start the agent, the way dh_installsystemd would.
+# Create the service account, then enable and start the agent the way
+# dh_installsystemd would.
 set -e
+
+# The account "service"-privilege modules run as when core is root
+# (internal/supervise: systemCreds). Core uses only its uid and primary gid:
+# no login, no home, no supplementary groups. Without it every such module
+# fails to start with 'service account "weave-agent" missing'.
+#
+# This runs before the systemd guard below on purpose: images are built in
+# containers and chroots, and the account must exist in the image they make.
+# Both steps are idempotent, and a group left behind by an earlier install
+# (or made by an administrator) is adopted rather than refused, which
+# `useradd --user-group` would do.
+if ! getent group weave-agent >/dev/null; then
+	groupadd --system weave-agent
+fi
+if ! getent passwd weave-agent >/dev/null; then
+	useradd --system --gid weave-agent --no-create-home --home-dir /nonexistent \
+		--shell /usr/sbin/nologin --comment "Weave agent service modules" weave-agent
+fi
 
 # /run/systemd/system exists only when systemd is PID 1. Without the guard this
 # fails inside a container or a debootstrap chroot — both of which are how guest

@@ -50,6 +50,16 @@ Details that are load-bearing rather than stylistic:
   rather than into the unit, so a package upgrade never overwrites them. Every
   `weave-agent` flag that has a `WEAVE_*` variable can be set this way; weaveboot
   passes its whole environment to core. The package ships no such file.
+- **The `weave-agent` service account.** `postinstall` creates a system user and
+  group named `weave-agent` — no login shell, home `/nonexistent`, nothing created
+  on disk — which `service`-privilege modules (`weave-linux-presence`, for one) run
+  as when core is root. Core uses only its uid and gid. Creation is idempotent and
+  adopts a group that already exists, and it happens before the systemd check, so
+  an image built in a container or chroot has the account too; `make package-test`
+  checks both in Docker. The package depends on `passwd` for `useradd`. Removal,
+  purge included, leaves the account in place, as Debian does with system
+  accounts: files elsewhere may still carry its uid, and a freed uid could be
+  reused by an account that would then own them. `userdel weave-agent` removes it.
 - **No sandboxing directives in the unit.** A module such as `weave-linux-exec`
   exists to execute what the host asks inside this guest; `ProtectSystem` and friends would
   break the feature rather than harden it. The isolation boundary is the VM.

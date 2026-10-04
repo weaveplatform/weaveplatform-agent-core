@@ -118,6 +118,11 @@ nfpms:
     license: MIT
     section: admin
     priority: optional
+    # postinstall creates the weave-agent service account with groupadd and
+    # useradd, which passwd provides. It is in every standard install but is
+    # not Essential, so it is declared rather than assumed.
+    dependencies:
+      - passwd
 
     # All three binaries land in one directory, not /usr/bin. weaveboot resolves
     # core as "the binary beside me" when no staged version layout exists

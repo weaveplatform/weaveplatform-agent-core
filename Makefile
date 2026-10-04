@@ -116,7 +116,12 @@ fuzz:
 snapshot:
 	goreleaser release --snapshot --clean --skip=sign,publish
 
+## package-test: postinstall creates the service account idempotently (in Docker; not part of gate)
+PACKAGE_TEST_IMAGE ?= ubuntu:24.04
+package-test:
+	docker run --rm -v "$(CURDIR)/packaging/linux:/pkg:ro" $(PACKAGE_TEST_IMAGE) sh /pkg/postinstall_test.sh
+
 ## gate: everything CI runs, in order
 gate: vet lint test cover vuln build tidy-check buf-lint gen-check core-independent
 
-.PHONY: help fmt lint vet test cover vuln build tidy-check protoc-plugins buf-lint gen gen-check core-independent fuzz snapshot gate
+.PHONY: help fmt lint vet test cover vuln build tidy-check protoc-plugins buf-lint gen gen-check core-independent fuzz snapshot package-test gate
