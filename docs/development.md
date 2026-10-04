@@ -129,10 +129,7 @@ platform carrying `weaveboot`, `weave-agent`, `weavectl` and `weavemanifest`, th
 `weave-agent` `.deb`, and a checksum file signed keylessly with cosign. Before 1.0, `feat:`
 bumps the minor version and `fix:` the patch; `ci:`, `docs:` and `chore:` do not release.
 
-There is one component, at the repository root, tagged plain `vX.Y.Z`. The first release is
-`v0.9.0`, set by `release-as` in `release-please-config.json`: the Go checksum database
-already records `v0.1.0`–`v0.8.1` for this module path, so a lower version could never be
-published. Remove `release-as` once `v0.9.0` is out.
+There is one component, at the repository root, tagged plain `vX.Y.Z`.
 
 Core releases no modules and no SDK. Each module is released and published from
 `weaveplatform-agent-modules`, and promoted through `weaveplatform-release-channels`.
