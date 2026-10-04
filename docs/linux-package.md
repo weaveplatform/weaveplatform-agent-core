@@ -43,9 +43,12 @@ Details that are load-bearing rather than stylistic:
 - **`KillMode=mixed`.** Core runs its own module shutdown; the default
   (`control-group`) signals the modules directly at the same moment, so core finds
   their sockets gone and reports a failed shutdown for what is really a race.
-- **The module binary is named for the module id.** `core.discoverModules` looks
-  for `<dir>/<id>`; a differently-named binary is simply never found — no error,
-  no log line.
+- **The module binary is named for the module id, and so is its directory.** Core
+  looks for `/usr/lib/weave/modules/<id>/<id>`, and the manifest's `id` must match the
+  directory. A module that breaks either rule is not run; `weavectl modules` lists it
+  `invalid` with the reason.
+- **`ExecReload=/bin/kill -HUP $MAINPID`.** `systemctl reload weave-agent` makes core
+  reread the modules directory. `$MAINPID` is weaveboot, which forwards SIGHUP to core.
 - **`EnvironmentFile=-/etc/default/weave-agent`.** Per-image settings go there
   rather than into the unit, so a package upgrade never overwrites them. Every
   `weave-agent` flag that has a `WEAVE_*` variable can be set this way; weaveboot
@@ -70,6 +73,42 @@ Details that are load-bearing rather than stylistic:
 - **No sandboxing directives in the unit.** A module such as `weave-linux-exec`
   exists to execute what the host asks inside this guest; `ProtectSystem` and friends would
   break the feature rather than harden it. The isolation boundary is the VM.
+
+## Installing or removing a module on a running guest
+
+A module package (`weave-linux-exec`, say) installs into `/usr/lib/weave/modules/<id>/`, and
+core picks it up while it runs: no reboot, no restart of weave-agent, and no restart of the
+modules that did not change.
+
+```sh
+dpkg -i weave-linux-exec_0.4.0_arm64.deb   # starts within a second or so
+dpkg -r weave-linux-exec                   # stops and leaves `weavectl modules`
+dpkg -i weave-linux-presence_0.5.0_arm64.deb   # an upgrade: replaced in place
+```
+
+Core's inotify watch on the modules directory sees dpkg rename each file into place and
+reloads half a second after the package goes quiet; the files dpkg is still writing
+(`*.dpkg-new`) are ignored. To reload at once, or where the watch cannot see (an image built
+in a chroot, a directory on a filesystem without inotify), any of these does the same:
+
+```sh
+systemctl reload weave-agent
+weavectl reload
+```
+
+and a rescan every minute catches anything else (`WEAVE_MODULE_RESCAN` in
+`/etc/default/weave-agent` changes the period; `0` turns it off). `weavectl reload` prints
+what changed:
+
+```
+added     weave-linux-exec
+invalid   weave-linux-broken  manifest: unexpected end of JSON input
+```
+
+A module whose directory is broken — a manifest that does not parse, no binary — is listed
+`invalid` with the reason, and stopped if it was running; every other module is unaffected.
+Fix it, or remove it, and the next reload acts on that. Hosts see each change as a
+`modules.changed` push ([`PROTOCOL.md`](PROTOCOL.md#moduleslist-moduleschanged)).
 
 ## The repository
 

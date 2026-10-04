@@ -26,6 +26,13 @@ ExecStart=/usr/lib/weave/weaveboot -- --modules-dir /usr/lib/weave/modules
 # leading '-' makes the file optional; the package does not ship one.
 EnvironmentFile=-/etc/default/weave-agent
 
+# `systemctl reload weave-agent` rereads the installed modules: a module package
+# installed, upgraded or removed takes effect without restarting core or the
+# modules it did not touch. $MAINPID is weaveboot, which forwards SIGHUP to core.
+# Core also watches the modules directory and rescans it every minute, so this is
+# the prompt path, not the only one.
+ExecReload=/bin/kill -HUP $MAINPID
+
 Restart=always
 RestartSec=2
 
