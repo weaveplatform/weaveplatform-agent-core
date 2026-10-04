@@ -25,6 +25,7 @@ import (
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/protocol/manifest"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/store"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/store/keyprotect"
+	"github.com/weaveplatform/weaveplatform-agent-core/internal/supervise"
 )
 
 func exe(name string) string {
@@ -135,10 +136,18 @@ func otherOS() string {
 // and returns Run's result.
 func runUntilReady(t *testing.T, opts Options) error {
 	t.Helper()
+	_, stop := startCore(t, opts)
+	return stop()
+}
+
+// startCore runs core until it is ready and its control service answers, and
+// returns a client and a stop that ends the run and returns Run's result.
+func startCore(t *testing.T, opts Options) (controlv1.ControlServiceClient, func() error) {
+	t.Helper()
 	ready := filepath.Join(t.TempDir(), "ready")
 	t.Setenv(envReadyFile, ready)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	go func() { done <- Run(ctx, opts) }()
 	deadline := time.After(30 * time.Second)
@@ -161,7 +170,7 @@ func runUntilReady(t *testing.T, opts Options) error {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	t.Cleanup(func() { conn.Close() })
 	for {
 		sctx, scancel := context.WithTimeout(context.Background(), time.Second)
 		_, err := client.Status(sctx, &controlv1.StatusRequest{})
@@ -175,13 +184,15 @@ func runUntilReady(t *testing.T, opts Options) error {
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
-	cancel()
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(30 * time.Second):
-		t.Fatal("Run did not return after its context ended")
-		return nil
+	return client, func() error {
+		cancel()
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(30 * time.Second):
+			t.Fatal("Run did not return after its context ended")
+			return nil
+		}
 	}
 }
 
@@ -216,7 +227,7 @@ func TestRunReachesReadyAndStops(t *testing.T) {
 	writeManifest(t, ver, testManifest("versioned", "never.present"))
 	writeFile(t, filepath.Join(ver, exe("module")), "bin")
 	writeFile(t, filepath.Join(mods, "versioned", "current"), "2.0.0\n")
-	// A second directory claiming an id already registered.
+	// A directory holding another module's id: invalid, and the rest start.
 	writeManifest(t, filepath.Join(mods, "dup"), testManifest("gated", "never.present"))
 	writeFile(t, filepath.Join(mods, "dup", exe("gated")), "bin")
 	// Built for another OS.
@@ -247,7 +258,7 @@ func TestRunReachesReadyAndStops(t *testing.T) {
 	for _, want := range []string{
 		"core starting",
 		"does not support this host",
-		"already registered",
+		"does not match its directory",
 		"control socket up",
 		"core stopping",
 	} {
@@ -376,12 +387,16 @@ func TestRunStartupFailures(t *testing.T) {
 		}
 	})
 
-	t.Run("modules", func(t *testing.T) {
+	// A modules directory core cannot read is a broken install, not an
+	// empty one. A NUL cannot appear in a path on any OS, so this fails as
+	// something other than "does not exist" everywhere.
+	t.Run("modules dir", func(t *testing.T) {
 		isolate(t, baseCaps())
 		dir := stateDir(t)
-		writeManifest(t, filepath.Join(dir, "modules", "nobin"), testManifest("nobin"))
-		err := Run(context.Background(), Options{StateDir: dir, Log: quiet})
-		if err == nil || !strings.Contains(err.Error(), "no binary found") {
+		err := Run(context.Background(), Options{
+			StateDir: dir, ModulesDir: filepath.Join(dir, "bad\x00dir"), Log: quiet,
+		})
+		if err == nil || !strings.Contains(err.Error(), "reading modules dir") {
 			t.Fatalf("Run = %v", err)
 		}
 	})
@@ -464,30 +479,52 @@ func TestRefuseUnverified(t *testing.T) {
 	}
 }
 
-func TestDiscoverModules(t *testing.T) {
-	t.Run("absent dir is empty", func(t *testing.T) {
-		specs, err := discoverModules(filepath.Join(t.TempDir(), "absent"))
-		if err != nil || specs != nil {
-			t.Fatalf("= %v, %v", specs, err)
+func TestModuleDirs(t *testing.T) {
+	if names, err := moduleDirs(filepath.Join(t.TempDir(), "absent")); err != nil || names != nil {
+		t.Fatalf("absent dir = %v, %v", names, err)
+	}
+	// See the "modules dir" start-up failure for why a NUL.
+	if _, err := moduleDirs(filepath.Join(t.TempDir(), "bad\x00dir")); err == nil {
+		t.Fatal("listed an unopenable path as a modules dir")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "stray-file"), "")
+	writeFile(t, filepath.Join(dir, "b", "x"), "")
+	writeFile(t, filepath.Join(dir, "a", "x"), "")
+	if names, err := moduleDirs(dir); err != nil || !slices.Equal(names, []string{"a", "b"}) {
+		t.Fatalf("= %v, %v", names, err)
+	}
+}
+
+func TestLoadModule(t *testing.T) {
+	invalid := func(t *testing.T, dir, name, want string) {
+		t.Helper()
+		ent, ok := loadModule(dir, name)
+		if !ok || !strings.Contains(ent.invalid, want) {
+			t.Fatalf("= %+v, %v; want invalid with %q", ent, ok, want)
 		}
-	})
-	// A NUL cannot appear in a path on any OS, so this is an error that is
-	// not "does not exist" everywhere. A regular file is not: Windows reports
-	// ReadDir on one as path-not-found, which discovery treats as no modules.
-	t.Run("unreadable dir", func(t *testing.T) {
-		if _, err := discoverModules(filepath.Join(t.TempDir(), "bad\x00dir")); err == nil {
-			t.Fatal("listed an unopenable path as a modules dir")
+	}
+	t.Run("not a module", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "file"), "")
+		if err := os.MkdirAll(filepath.Join(dir, "empty"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"absent", "file", "empty"} {
+			if ent, ok := loadModule(dir, name); ok {
+				t.Errorf("%s: = %+v", name, ent)
+			}
 		}
 	})
 	t.Run("corrupt manifest", func(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, filepath.Join(dir, "m", "module.manifest.json"), "{")
-		if _, err := discoverModules(
-			dir,
-		); err == nil ||
-			!strings.Contains(err.Error(), "module m") {
-			t.Fatalf("= %v", err)
-		}
+		invalid(t, dir, "m", "manifest")
+	})
+	t.Run("id does not match the directory", func(t *testing.T) {
+		dir := t.TempDir()
+		writeManifest(t, filepath.Join(dir, "m"), testManifest("other"))
+		invalid(t, dir, "m", `manifest id "other" does not match its directory "m"`)
 	})
 	// A directory where the binary should be is not a binary.
 	t.Run("binary is a directory", func(t *testing.T) {
@@ -496,47 +533,80 @@ func TestDiscoverModules(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(dir, "m", exe("m")), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := discoverModules(
-			dir,
-		); err == nil ||
-			!strings.Contains(err.Error(), "no binary found") {
-			t.Fatalf("= %v", err)
+		invalid(t, dir, "m", "no binary found")
+	})
+	t.Run("config is a directory", func(t *testing.T) {
+		dir := t.TempDir()
+		writeManifest(t, filepath.Join(dir, "m"), testManifest("m"))
+		writeFile(t, filepath.Join(dir, "m", exe("m")), "")
+		if err := os.MkdirAll(filepath.Join(dir, "m", "config.json"), 0o755); err != nil {
+			t.Fatal(err)
 		}
+		invalid(t, dir, "m", "config.json unreadable")
 	})
 	t.Run("id-named binary wins over the fallback", func(t *testing.T) {
 		dir := t.TempDir()
 		writeManifest(t, filepath.Join(dir, "m"), testManifest("m"))
-		writeFile(t, filepath.Join(dir, "m", exe("m")), "")
-		writeFile(t, filepath.Join(dir, "m", exe("module")), "")
-		specs, err := discoverModules(dir)
-		if err != nil || len(specs) != 1 {
-			t.Fatalf("= %v, %v", specs, err)
+		writeFile(t, filepath.Join(dir, "m", exe("m")), "a")
+		writeFile(t, filepath.Join(dir, "m", exe("module")), "b")
+		ent, ok := loadModule(dir, "m")
+		if !ok || ent.invalid != "" || ent.unsettled {
+			t.Fatalf("= %+v, %v", ent, ok)
 		}
-		if got := filepath.Base(specs[0].BinPath); got != exe("m") {
+		if got := filepath.Base(ent.spec.BinPath); got != exe("m") {
 			t.Fatalf("picked %s", got)
 		}
-		if specs[0].Config != nil {
-			t.Fatalf("config %q with no config.json", specs[0].Config)
+		if ent.spec.Config != nil {
+			t.Fatalf("config %q with no config.json", ent.spec.Config)
+		}
+		// sha256("a")
+		if ent.spec.Digest != "sha256:ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb" {
+			t.Fatalf("digest %s", ent.spec.Digest)
 		}
 	})
-	t.Run("a current naming anything but one version dir is skipped", func(t *testing.T) {
+	t.Run("versioned", func(t *testing.T) {
+		dir := t.TempDir()
+		ver := filepath.Join(dir, "m", "versions", "2.0.0")
+		writeManifest(t, ver, testManifest("m"))
+		writeFile(t, filepath.Join(ver, exe("m")), "")
+		writeFile(t, filepath.Join(ver, "config.json"), `{"a":1}`)
+		writeFile(t, filepath.Join(dir, "m", "current"), "2.0.0\n")
+		ent, ok := loadModule(dir, "m")
+		if !ok || ent.invalid != "" || filepath.Dir(ent.spec.BinPath) != ver ||
+			string(ent.spec.Config) != `{"a":1}` {
+			t.Fatalf("= %+v, %v", ent, ok)
+		}
+		writeFile(t, filepath.Join(dir, "m", "current"), "3.0.0\n")
+		invalid(t, dir, "m", "current names a version with no manifest: 3.0.0")
+	})
+	t.Run("a current naming anything but one version dir is invalid", func(t *testing.T) {
 		for _, cur := range []string{"", "..", "../escape", "/abs", `a\b`, "c:d"} {
 			dir := t.TempDir()
 			// A manifest the escaping path would reach if it were followed.
 			writeManifest(t, filepath.Join(dir, "escape"), testManifest("escape"))
 			writeFile(t, filepath.Join(dir, "escape", exe("escape")), "")
 			writeFile(t, filepath.Join(dir, "m", "current"), cur+"\n")
-			specs, err := discoverModules(dir)
-			if err != nil {
-				t.Fatalf("current %q: %v", cur, err)
-			}
-			for _, sp := range specs {
-				if filepath.Dir(sp.BinPath) != filepath.Join(dir, "escape") {
-					t.Fatalf("current %q: followed to %s", cur, sp.BinPath)
-				}
+			ent, ok := loadModule(dir, "m")
+			if !ok || !strings.Contains(ent.invalid, "current does not name a version directory") {
+				t.Fatalf("current %q: = %+v, %v", cur, ent, ok)
 			}
 		}
 	})
+}
+
+func TestStableDigest(t *testing.T) {
+	if _, _, err := stableDigest(filepath.Join(t.TempDir(), "absent")); err == nil {
+		t.Fatal("digest of a missing file")
+	}
+	// Readable by stat but not by open: a directory.
+	if _, _, err := stableDigest(t.TempDir()); err == nil {
+		t.Fatal("digest of a directory")
+	}
+	p := filepath.Join(t.TempDir(), "bin")
+	writeFile(t, p, "x")
+	if d, settled, err := stableDigest(p); err != nil || !settled || d == "" {
+		t.Fatalf("= %q, %v, %v", d, settled, err)
+	}
 }
 
 func TestSignalReadyFailuresAreNotFatal(t *testing.T) {
@@ -624,5 +694,107 @@ func TestRunSocketChannel(t *testing.T) {
 	}
 	if !rec.has("hypervisor channel listening") && !rec.has("could not connect") {
 		t.Fatal("log says neither that the channel is listening nor why not")
+	}
+}
+
+// A running core picks up a module installed after it started, through each
+// trigger: ControlService.Reload (which answers with what it did), the reload
+// channel SIGHUP feeds, and the periodic rescan.
+func TestRunReloadsModules(t *testing.T) {
+	dir := stateDir(t)
+	isolate(t, baseCaps())
+	old := watchDir
+	watchDir = func(context.Context, *slog.Logger, string, func()) {}
+	t.Cleanup(func() { watchDir = old })
+	mods := filepath.Join(dir, "modules")
+	reload := make(chan struct{})
+	client, stop := startCore(t, Options{
+		StateDir: dir,
+		Reload:   reload,
+		Verifier: supervise.VerifierFunc(func(string, *manifest.Manifest) error { return nil }),
+		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	listed := func(id string) bool {
+		resp, err := client.Modules(context.Background(), &controlv1.ModulesRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return slices.ContainsFunc(resp.GetModules(), func(m *controlv1.ModuleStatus) bool {
+			return m.GetId() == id
+		})
+	}
+	eventually := func(id string) {
+		t.Helper()
+		deadline := time.Now().Add(20 * time.Second)
+		for !listed(id) {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s never appeared", id)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+
+	writeManifest(t, filepath.Join(mods, "a"), testManifest("a", "never.present"))
+	writeFile(t, filepath.Join(mods, "a", exe("a")), "a")
+	writeFile(t, filepath.Join(mods, "broken", "module.manifest.json"), "{")
+	resp, err := client.Reload(context.Background(), &controlv1.ReloadRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(resp.GetAdded(), []string{"a"}) || len(resp.GetInvalid()) != 1 ||
+		resp.GetInvalid()[0].GetId() != "broken" {
+		t.Fatalf("reload = %v", resp)
+	}
+
+	writeManifest(t, filepath.Join(mods, "b"), testManifest("b", "never.present"))
+	writeFile(t, filepath.Join(mods, "b", exe("b")), "b")
+	reload <- struct{}{}
+	eventually("b")
+
+	if err := stop(); err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+}
+
+// With a rescan period and no other trigger, core still finds a new module.
+func TestRunRescansModules(t *testing.T) {
+	dir := stateDir(t)
+	isolate(t, baseCaps())
+	old := watchDir
+	watchDir = func(context.Context, *slog.Logger, string, func()) {}
+	t.Cleanup(func() { watchDir = old })
+	client, stop := startCore(t, Options{
+		StateDir:     dir,
+		ModuleRescan: 50 * time.Millisecond,
+		Log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	mods := filepath.Join(dir, "modules")
+	writeManifest(t, filepath.Join(mods, "a"), testManifest("a", "never.present"))
+	writeFile(t, filepath.Join(mods, "a", exe("a")), "a")
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		resp, err := client.Modules(context.Background(), &controlv1.ModulesRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.GetModules()) == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the rescan never found the module")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := stop(); err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+}
+
+// A failing reload reaches the client as an error, not an empty answer.
+func TestReloadFails(t *testing.T) {
+	h := newHarness(t)
+	h.rec.dir = filepath.Join(h.dir, "bad\x00dir")
+	if _, err := h.rec.reload(context.Background()); err == nil {
+		t.Fatal("reload of an unreadable directory answered")
 	}
 }

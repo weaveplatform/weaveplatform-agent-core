@@ -38,6 +38,9 @@ type Server struct {
 		Enrolled() bool
 	}
 	StartedAt time.Time
+	// Reloader rereads the modules directory and applies what changed; nil
+	// answers Reload as unimplemented.
+	Reloader func(context.Context) (*controlv1.ReloadResponse, error)
 
 	grpcServer *grpc.Server
 }
@@ -155,6 +158,24 @@ func (s *Server) Rollback(
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
 	return &controlv1.RollbackResponse{RolledBackTo: version}, nil
+}
+
+// Reload implements ControlService. It is as privileged as Install: the
+// control socket admits only root or core's own user, for every call.
+func (s *Server) Reload(
+	ctx context.Context,
+	_ *controlv1.ReloadRequest,
+) (*controlv1.ReloadResponse, error) {
+	if s.Reloader == nil {
+		//nolint:wrapcheck // a gRPC status is the handler's contract
+		return nil, status.Error(codes.Unimplemented, "module reload is not configured")
+	}
+	resp, err := s.Reloader(ctx)
+	if err != nil {
+		//nolint:wrapcheck // a gRPC status is the handler's contract
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
+	return resp, nil
 }
 
 // Logs implements ControlService. Lands with the log pipeline.

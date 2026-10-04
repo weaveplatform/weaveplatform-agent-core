@@ -107,6 +107,17 @@ func (m *Manager) lockModule(id string) *sync.Mutex {
 	return mu
 }
 
+// LockModule takes the per-module lock install and rollback hold, and returns
+// its release. Core's module reload holds it while it compares a module on
+// disk with the running one and acts on the difference: a promote replaces
+// the process before it flips `current`, and a reload that looked in between
+// would see the two disagree and put the old version back.
+func (m *Manager) LockModule(id string) (unlock func()) {
+	mu := m.lockModule(id)
+	mu.Lock()
+	return mu.Unlock
+}
+
 func (m *Manager) client() *http.Client {
 	if m.Client != nil {
 		return m.Client

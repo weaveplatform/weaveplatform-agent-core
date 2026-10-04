@@ -23,7 +23,7 @@ func stubCore(t *testing.T, fn func(context.Context, core.Options) error) {
 }
 
 func clearEnv(t *testing.T) {
-	for _, k := range []string{"WEAVE_POLICY_FILE", "WEAVE_MANIFEST_URL", "WEAVE_MANIFEST_ROOT_PUB", "WEAVE_CHANNEL_DIR", "WEAVE_CHANNEL_PUB", "WEAVE_CHANNEL"} {
+	for _, k := range []string{"WEAVE_POLICY_FILE", "WEAVE_MANIFEST_URL", "WEAVE_MANIFEST_ROOT_PUB", "WEAVE_CHANNEL_DIR", "WEAVE_CHANNEL_PUB", "WEAVE_CHANNEL", "WEAVE_MODULE_RESCAN"} {
 		t.Setenv(k, "")
 	}
 }
@@ -158,5 +158,33 @@ func TestChannelFromEnvironment(t *testing.T) {
 	}
 	if got.Channel != "hvsocket:2010" {
 		t.Fatalf("Channel = %q, want WEAVE_CHANNEL's value", got.Channel)
+	}
+}
+
+// The rescan period comes from the flag, else WEAVE_MODULE_RESCAN, else a
+// minute; a value that does not parse falls back rather than stopping core.
+func TestModuleRescanSetting(t *testing.T) {
+	for name, c := range map[string]struct {
+		env  string
+		args []string
+		want time.Duration
+	}{
+		"default":     {"", nil, time.Minute},
+		"environment": {"5s", nil, 5 * time.Second},
+		"bad env":     {"soon", nil, time.Minute},
+		"flag wins":   {"5s", []string{"-module-rescan", "0"}, 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			clearEnv(t)
+			t.Setenv("WEAVE_MODULE_RESCAN", c.env)
+			var got core.Options
+			stubCore(t, func(_ context.Context, o core.Options) error { got = o; return nil })
+			if code := run(c.args, &bytes.Buffer{}, &bytes.Buffer{}); code != 0 {
+				t.Fatalf("exit %d", code)
+			}
+			if got.ModuleRescan != c.want {
+				t.Fatalf("ModuleRescan = %v, want %v", got.ModuleRescan, c.want)
+			}
+		})
 	}
 }

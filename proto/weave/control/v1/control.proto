@@ -18,6 +18,11 @@ service ControlService {
   rpc Surfaces(SurfacesRequest) returns (SurfacesResponse);
   rpc Install(InstallRequest) returns (InstallResponse);
   rpc Rollback(RollbackRequest) returns (RollbackResponse);
+  // Reload rereads the installed-modules directory and applies what changed
+  // since core last read it: a new module starts, a removed one stops, and one
+  // whose manifest version, binary or config changed is replaced. It is the
+  // same pass SIGHUP, the directory watch and the periodic rescan run.
+  rpc Reload(ReloadRequest) returns (ReloadResponse);
   rpc Logs(LogsRequest) returns (stream LogLine);
 }
 
@@ -42,7 +47,7 @@ message ModuleStatus {
   // Lifecycle state, then ": " and the detail when there is one. States:
   // "pending", "starting", "running", "backoff", "start-limited",
   // "unsupported-protocol", "requirements-unmet", "waiting-for-session",
-  // "stopped".
+  // "stopped", "invalid".
   string state = 4;
   weave.agent.v1.Health health = 5;
   int32 pid = 6;
@@ -86,6 +91,27 @@ message RollbackRequest {
 
 message RollbackResponse {
   string rolled_back_to = 1;
+}
+
+message ReloadRequest {}
+
+message ReloadResponse {
+  // Module ids started by this pass.
+  repeated string added = 1;
+  // Module ids stopped because they are no longer installed.
+  repeated string removed = 2;
+  // Module ids restarted on a changed version, binary or config.
+  repeated string replaced = 3;
+  // Every module directory core cannot run as it stands after this pass,
+  // whether or not this pass is the one that found it.
+  repeated InvalidModule invalid = 4;
+}
+
+message InvalidModule {
+  // The module directory's name, which is the module id when the manifest
+  // could be read.
+  string id = 1;
+  string detail = 2;
 }
 
 message LogsRequest {

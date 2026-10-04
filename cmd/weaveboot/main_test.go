@@ -45,6 +45,10 @@ func TestArgsReachWeaveboot(t *testing.T) {
 	if got.VerifyCore == nil || got.Log == nil {
 		t.Fatal("weaveboot started without a core verifier or logger")
 	}
+	// SIGHUP is forwarded where there is one; Windows has nothing to forward.
+	if (got.Forward != nil) != (len(forwardSignals) > 0) {
+		t.Fatalf("Forward = %v with forwardSignals %v", got.Forward, forwardSignals)
+	}
 }
 
 // The state dir must reach core even when only the environment names it,
@@ -260,6 +264,7 @@ func TestServiceModeRunsWithoutLog(t *testing.T) {
 		[]string{"-state-dir", blocker},
 		&bytes.Buffer{},
 		true,
+		nil,
 	); code != 0 ||
 		!ran {
 		t.Fatalf("exit %d ran=%v", code, ran)

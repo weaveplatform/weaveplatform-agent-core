@@ -59,7 +59,7 @@ func entry(args []string, stdout, stderr io.Writer) int {
 func serve(args []string) (int, error) {
 	code := 0
 	err := runService(func(ctx context.Context) error {
-		code = boot(ctx, args, io.Discard, true)
+		code = boot(ctx, args, io.Discard, true, nil)
 		if code != 0 {
 			return fmt.Errorf("weaveboot exited with status %d", code)
 		}
@@ -74,10 +74,22 @@ func serve(args []string) (int, error) {
 func run(args []string, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
-	return boot(ctx, args, stderr, false)
+	var forward chan os.Signal
+	if len(forwardSignals) > 0 {
+		forward = make(chan os.Signal, 1)
+		signal.Notify(forward, forwardSignals...)
+		defer signal.Stop(forward)
+	}
+	return boot(ctx, args, stderr, false, forward)
 }
 
-func boot(ctx context.Context, args []string, stderr io.Writer, service bool) int {
+func boot(
+	ctx context.Context,
+	args []string,
+	stderr io.Writer,
+	service bool,
+	forward <-chan os.Signal,
+) int {
 	fs := flag.NewFlagSet("weaveboot", flag.ContinueOnError)
 	// Buffered because under the SCM where it should go is only known once
 	// --state-dir has been parsed.
@@ -118,6 +130,7 @@ func boot(ctx context.Context, args []string, stderr io.Writer, service bool) in
 		AgentArgs:  agentArgs,
 		VerifyCore: verify.Core(log),
 		Output:     coreOut,
+		Forward:    forward,
 	})
 	if err != nil {
 		log.Error("weaveboot failed", "err", err)

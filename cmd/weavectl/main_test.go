@@ -31,6 +31,7 @@ type fakeControl struct {
 	install  *controlv1.InstallRequest
 	rollback *controlv1.RollbackRequest
 	surfaces *controlv1.SurfacesResponse
+	reload   *controlv1.ReloadResponse
 	fail     bool
 }
 
@@ -119,6 +120,21 @@ func (f *fakeControl) Rollback(
 	defer f.mu.Unlock()
 	f.rollback = req
 	return &controlv1.RollbackResponse{RolledBackTo: "0.0.9"}, nil
+}
+
+func (f *fakeControl) Reload(
+	context.Context,
+	*controlv1.ReloadRequest,
+) (*controlv1.ReloadResponse, error) {
+	if err := f.err(); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.reload == nil {
+		return &controlv1.ReloadResponse{}, nil
+	}
+	return f.reload, nil
 }
 
 func socketAddr(t *testing.T) string {
@@ -284,10 +300,49 @@ func TestRollback(t *testing.T) {
 	}
 }
 
+func TestReload(t *testing.T) {
+	f := &fakeControl{}
+	addr := serve(t, f)
+	code, out, errOut := ctl("-socket", addr, "reload")
+	if code != 0 || strings.TrimSpace(out) != "no module changes" {
+		t.Fatalf("empty reload: exit %d %q %s", code, out, errOut)
+	}
+
+	f.mu.Lock()
+	f.reload = &controlv1.ReloadResponse{
+		Added:    []string{"weave-linux-exec"},
+		Removed:  []string{"weave-linux-old"},
+		Replaced: []string{"weave-linux-presence"},
+		Invalid: []*controlv1.InvalidModule{
+			{Id: "weave-linux-broken", Detail: "manifest: unexpected end of JSON input"},
+		},
+	}
+	f.mu.Unlock()
+	code, out, _ = ctl("-socket", addr, "reload")
+	want := "added     weave-linux-exec\n" +
+		"removed   weave-linux-old\n" +
+		"replaced  weave-linux-presence\n" +
+		"invalid   weave-linux-broken  manifest: unexpected end of JSON input\n"
+	if code != 0 || out != want {
+		t.Fatalf("reload: exit %d\n%s\nwant\n%s", code, out, want)
+	}
+
+	// Nothing changed, but something is still broken: both are said.
+	f.mu.Lock()
+	f.reload = &controlv1.ReloadResponse{
+		Invalid: []*controlv1.InvalidModule{{Id: "b", Detail: "no binary"}},
+	}
+	f.mu.Unlock()
+	code, out, _ = ctl("-socket", addr, "reload")
+	if code != 0 || out != "invalid  b  no binary\nno module changes\n" {
+		t.Fatalf("invalid only: exit %d %q", code, out)
+	}
+}
+
 func TestServerErrorsExitOne(t *testing.T) {
 	addr := serve(t, &fakeControl{fail: true})
 	for _, args := range [][]string{
-		{"status"}, {"modules"}, {"surfaces"}, {"install", "m"}, {"rollback", "m"},
+		{"status"}, {"modules"}, {"surfaces"}, {"install", "m"}, {"rollback", "m"}, {"reload"},
 	} {
 		code, _, errOut := ctl(append([]string{"-socket", addr}, args...)...)
 		if code != 1 || !strings.Contains(errOut, "weavectl: "+args[0]+":") ||

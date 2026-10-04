@@ -17,6 +17,7 @@ const (
 	StateRequirementsUnmet   = registry.StateRequirementsUnmet
 	StateWaitingForSession   = registry.StateWaitingForSession
 	StateStopped             = registry.StateStopped
+	StateInvalid             = registry.StateInvalid
 )
 
 // Status is one module's supervision snapshot: its registry entry.

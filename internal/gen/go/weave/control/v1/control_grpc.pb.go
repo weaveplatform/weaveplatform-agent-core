@@ -28,6 +28,7 @@ const (
 	ControlService_Surfaces_FullMethodName = "/weave.control.v1.ControlService/Surfaces"
 	ControlService_Install_FullMethodName  = "/weave.control.v1.ControlService/Install"
 	ControlService_Rollback_FullMethodName = "/weave.control.v1.ControlService/Rollback"
+	ControlService_Reload_FullMethodName   = "/weave.control.v1.ControlService/Reload"
 	ControlService_Logs_FullMethodName     = "/weave.control.v1.ControlService/Logs"
 )
 
@@ -42,6 +43,11 @@ type ControlServiceClient interface {
 	Surfaces(ctx context.Context, in *SurfacesRequest, opts ...grpc.CallOption) (*SurfacesResponse, error)
 	Install(ctx context.Context, in *InstallRequest, opts ...grpc.CallOption) (*InstallResponse, error)
 	Rollback(ctx context.Context, in *RollbackRequest, opts ...grpc.CallOption) (*RollbackResponse, error)
+	// Reload rereads the installed-modules directory and applies what changed
+	// since core last read it: a new module starts, a removed one stops, and one
+	// whose manifest version, binary or config changed is replaced. It is the
+	// same pass SIGHUP, the directory watch and the periodic rescan run.
+	Reload(ctx context.Context, in *ReloadRequest, opts ...grpc.CallOption) (*ReloadResponse, error)
 	Logs(ctx context.Context, in *LogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogLine], error)
 }
 
@@ -103,6 +109,16 @@ func (c *controlServiceClient) Rollback(ctx context.Context, in *RollbackRequest
 	return out, nil
 }
 
+func (c *controlServiceClient) Reload(ctx context.Context, in *ReloadRequest, opts ...grpc.CallOption) (*ReloadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReloadResponse)
+	err := c.cc.Invoke(ctx, ControlService_Reload_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *controlServiceClient) Logs(ctx context.Context, in *LogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogLine], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &ControlService_ServiceDesc.Streams[0], ControlService_Logs_FullMethodName, cOpts...)
@@ -133,6 +149,11 @@ type ControlServiceServer interface {
 	Surfaces(context.Context, *SurfacesRequest) (*SurfacesResponse, error)
 	Install(context.Context, *InstallRequest) (*InstallResponse, error)
 	Rollback(context.Context, *RollbackRequest) (*RollbackResponse, error)
+	// Reload rereads the installed-modules directory and applies what changed
+	// since core last read it: a new module starts, a removed one stops, and one
+	// whose manifest version, binary or config changed is replaced. It is the
+	// same pass SIGHUP, the directory watch and the periodic rescan run.
+	Reload(context.Context, *ReloadRequest) (*ReloadResponse, error)
 	Logs(*LogsRequest, grpc.ServerStreamingServer[LogLine]) error
 	mustEmbedUnimplementedControlServiceServer()
 }
@@ -158,6 +179,9 @@ func (UnimplementedControlServiceServer) Install(context.Context, *InstallReques
 }
 func (UnimplementedControlServiceServer) Rollback(context.Context, *RollbackRequest) (*RollbackResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Rollback not implemented")
+}
+func (UnimplementedControlServiceServer) Reload(context.Context, *ReloadRequest) (*ReloadResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Reload not implemented")
 }
 func (UnimplementedControlServiceServer) Logs(*LogsRequest, grpc.ServerStreamingServer[LogLine]) error {
 	return status.Error(codes.Unimplemented, "method Logs not implemented")
@@ -273,6 +297,24 @@ func _ControlService_Rollback_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ControlService_Reload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReloadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServiceServer).Reload(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlService_Reload_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServiceServer).Reload(ctx, req.(*ReloadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ControlService_Logs_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(LogsRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -310,6 +352,10 @@ var ControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Rollback",
 			Handler:    _ControlService_Rollback_Handler,
+		},
+		{
+			MethodName: "Reload",
+			Handler:    _ControlService_Reload_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

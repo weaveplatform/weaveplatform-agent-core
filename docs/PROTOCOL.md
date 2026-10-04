@@ -131,7 +131,10 @@ Its kinds:
 The registry of installed modules, as one snapshot. `modules.list` asks for it; the answer is
 `modules.list.result` with the request's `id`. After authenticating, the host is also pushed a
 `modules.changed` (no `id`) whenever a module is added or removed or any module's state or
-health changes, for as long as that connection lasts. A host that wants a complete view sends
+health changes, for as long as that connection lasts. That includes core rereading its
+modules directory while it runs (a module package installed, upgraded or removed on the
+guest): a new module appears as `pending` and moves on from there, a removed one leaves the
+snapshot, and a replaced one leaves and comes back at its new `version`. A host that wants a complete view sends
 `modules.list` after `auth.result` and applies every `modules.changed` after it, keeping the
 snapshot with the higher `revision` — pushes are not queued behind a list answer, so the two
 can arrive in either order.
@@ -175,16 +178,21 @@ can arrive in either order.
 |---|---|
 | `revision` | increases with every change for the life of the core process; restarts from 1 with core |
 | `modules` | sorted by `id`; always an array |
-| `id`, `version`, `protocol` | from the manifest; `protocol` is 0 until the module has completed a handshake |
+| `id`, `version`, `protocol` | from the manifest; `protocol` is 0 until the module has completed a handshake. An `invalid` entry carries no manifest identity: its `id` is the module directory's name (which a valid module shares with its manifest id), and `version`, `address`, `capabilities` and the placement are empty |
 | `address` | what to put in an envelope's `module` to reach it: the manifest's `address`, or its `id` |
 | `capabilities` | the manifest's required capabilities; always an array |
 | `privilege`, `session` | the manifest's placement |
-| `state` | `pending`, `starting`, `running`, `backoff`, `start-limited`, `unsupported-protocol`, `requirements-unmet`, `waiting-for-session`, `stopped` |
+| `state` | `pending`, `starting`, `running`, `backoff`, `start-limited`, `unsupported-protocol`, `requirements-unmet`, `waiting-for-session`, `stopped`, `invalid` |
 | `detail` | why it is in that state; omitted when there is nothing to say |
 | `health.status` | `healthy`, `degraded`, `unhealthy`, or `unknown` before the first poll |
 | `health.reason` | the module's own reason; omitted when empty |
 | `restarts` | crash restarts since core started it |
 | `since` | when it entered `state`, RFC 3339 UTC |
+
+`invalid` is a module directory core will not run as it stands — a manifest that does not
+parse, no binary, a manifest id that does not match the directory, an address another module
+already answers to — and `detail` says which.
+It is never launched; it changes when the directory is fixed or removed.
 
 A host should treat an unknown `state` or `health.status` as not running / unknown rather
 than failing: the vocabulary may grow.

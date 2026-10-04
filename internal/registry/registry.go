@@ -47,6 +47,11 @@ const (
 	StateWaitingForSession State = "waiting-for-session"
 	// StateStopped: cleanly stopped (core shutdown or operator).
 	StateStopped State = "stopped"
+	// StateInvalid: a module directory core cannot run as it stands — a
+	// manifest that does not parse, no binary, an id that does not match its
+	// directory. Detail says which. Never launched; the next module reload
+	// that finds it fixed starts it.
+	StateInvalid State = "invalid"
 )
 
 // Module is one installed module's entry.
@@ -148,6 +153,11 @@ func (r *Registry) Get(id string) (Module, bool) {
 // supervisor refuses a second module on a taken address, so there is at most
 // one.
 func (r *Registry) ByAddress(address string) (Module, bool) {
+	// An invalid entry has no address; it must not answer for frames that
+	// name none.
+	if address == "" {
+		return Module{}, false
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, m := range r.modules {

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/core"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/verify"
@@ -63,6 +64,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		os.Getenv("WEAVE_CHANNEL"),
 		"host channel transport: auto (default), virtio-serial, vsock:<port> (Linux), hvsocket:<port> (Windows) or unix:<absolute path> (containers)",
 	)
+	rescan := fs.Duration(
+		"module-rescan",
+		envDuration("WEAVE_MODULE_RESCAN", defaultModuleRescan),
+		"how often the modules directory is reread whatever the watch reports; 0 disables (also WEAVE_MODULE_RESCAN)",
+	)
 	showVersion := fs.Bool("version", false, "print version and exit")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -80,6 +86,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
+	reload := notifyReload(ctx)
 
 	// An offline install — a VM guest, an air-gapped host — has no manifest
 	// server to fetch from, so the signed channel manifest ships beside the
@@ -106,6 +113,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		RootPubPath:    *rootPub,
 		ChannelPubPath: *channelPub,
 		Channel:        *channel,
+		ModuleRescan:   *rescan,
+		Reload:         reload,
 		Log:            log,
 	})
 	if err != nil {
@@ -113,4 +122,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// defaultModuleRescan is the safety net under the directory watch and SIGHUP:
+// a minute is soon enough for a change nothing reported, and rereading a
+// handful of module directories that often costs nothing.
+const defaultModuleRescan = time.Minute
+
+// envDuration reads a duration setting from the environment, falling back to
+// def when it is unset or does not parse — the flag's own parse then reports
+// nothing, so a typo in /etc/default/weave-agent costs the setting, not core.
+func envDuration(name string, def time.Duration) time.Duration {
+	if v := os.Getenv(name); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return def
 }

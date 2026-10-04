@@ -184,7 +184,7 @@ type ModuleStatus struct {
 	// Lifecycle state, then ": " and the detail when there is one. States:
 	// "pending", "starting", "running", "backoff", "start-limited",
 	// "unsupported-protocol", "requirements-unmet", "waiting-for-session",
-	// "stopped".
+	// "stopped", "invalid".
 	State    string     `protobuf:"bytes,4,opt,name=state,proto3" json:"state,omitempty"`
 	Health   *v1.Health `protobuf:"bytes,5,opt,name=health,proto3" json:"health,omitempty"`
 	Pid      int32      `protobuf:"varint,6,opt,name=pid,proto3" json:"pid,omitempty"`
@@ -660,6 +660,169 @@ func (x *RollbackResponse) GetRolledBackTo() string {
 	return ""
 }
 
+type ReloadRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReloadRequest) Reset() {
+	*x = ReloadRequest{}
+	mi := &file_weave_control_v1_control_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReloadRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReloadRequest) ProtoMessage() {}
+
+func (x *ReloadRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_weave_control_v1_control_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReloadRequest.ProtoReflect.Descriptor instead.
+func (*ReloadRequest) Descriptor() ([]byte, []int) {
+	return file_weave_control_v1_control_proto_rawDescGZIP(), []int{12}
+}
+
+type ReloadResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Module ids started by this pass.
+	Added []string `protobuf:"bytes,1,rep,name=added,proto3" json:"added,omitempty"`
+	// Module ids stopped because they are no longer installed.
+	Removed []string `protobuf:"bytes,2,rep,name=removed,proto3" json:"removed,omitempty"`
+	// Module ids restarted on a changed version, binary or config.
+	Replaced []string `protobuf:"bytes,3,rep,name=replaced,proto3" json:"replaced,omitempty"`
+	// Every module directory core cannot run as it stands after this pass,
+	// whether or not this pass is the one that found it.
+	Invalid       []*InvalidModule `protobuf:"bytes,4,rep,name=invalid,proto3" json:"invalid,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReloadResponse) Reset() {
+	*x = ReloadResponse{}
+	mi := &file_weave_control_v1_control_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReloadResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReloadResponse) ProtoMessage() {}
+
+func (x *ReloadResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_weave_control_v1_control_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReloadResponse.ProtoReflect.Descriptor instead.
+func (*ReloadResponse) Descriptor() ([]byte, []int) {
+	return file_weave_control_v1_control_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *ReloadResponse) GetAdded() []string {
+	if x != nil {
+		return x.Added
+	}
+	return nil
+}
+
+func (x *ReloadResponse) GetRemoved() []string {
+	if x != nil {
+		return x.Removed
+	}
+	return nil
+}
+
+func (x *ReloadResponse) GetReplaced() []string {
+	if x != nil {
+		return x.Replaced
+	}
+	return nil
+}
+
+func (x *ReloadResponse) GetInvalid() []*InvalidModule {
+	if x != nil {
+		return x.Invalid
+	}
+	return nil
+}
+
+type InvalidModule struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The module directory's name, which is the module id when the manifest
+	// could be read.
+	Id            string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Detail        string `protobuf:"bytes,2,opt,name=detail,proto3" json:"detail,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InvalidModule) Reset() {
+	*x = InvalidModule{}
+	mi := &file_weave_control_v1_control_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InvalidModule) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InvalidModule) ProtoMessage() {}
+
+func (x *InvalidModule) ProtoReflect() protoreflect.Message {
+	mi := &file_weave_control_v1_control_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InvalidModule.ProtoReflect.Descriptor instead.
+func (*InvalidModule) Descriptor() ([]byte, []int) {
+	return file_weave_control_v1_control_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *InvalidModule) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *InvalidModule) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
 type LogsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Filter to one module; empty streams core and all modules.
@@ -671,7 +834,7 @@ type LogsRequest struct {
 
 func (x *LogsRequest) Reset() {
 	*x = LogsRequest{}
-	mi := &file_weave_control_v1_control_proto_msgTypes[12]
+	mi := &file_weave_control_v1_control_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -683,7 +846,7 @@ func (x *LogsRequest) String() string {
 func (*LogsRequest) ProtoMessage() {}
 
 func (x *LogsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_weave_control_v1_control_proto_msgTypes[12]
+	mi := &file_weave_control_v1_control_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -696,7 +859,7 @@ func (x *LogsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogsRequest.ProtoReflect.Descriptor instead.
 func (*LogsRequest) Descriptor() ([]byte, []int) {
-	return file_weave_control_v1_control_proto_rawDescGZIP(), []int{12}
+	return file_weave_control_v1_control_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *LogsRequest) GetModuleId() string {
@@ -724,7 +887,7 @@ type LogLine struct {
 
 func (x *LogLine) Reset() {
 	*x = LogLine{}
-	mi := &file_weave_control_v1_control_proto_msgTypes[13]
+	mi := &file_weave_control_v1_control_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -736,7 +899,7 @@ func (x *LogLine) String() string {
 func (*LogLine) ProtoMessage() {}
 
 func (x *LogLine) ProtoReflect() protoreflect.Message {
-	mi := &file_weave_control_v1_control_proto_msgTypes[13]
+	mi := &file_weave_control_v1_control_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -749,7 +912,7 @@ func (x *LogLine) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogLine.ProtoReflect.Descriptor instead.
 func (*LogLine) Descriptor() ([]byte, []int) {
-	return file_weave_control_v1_control_proto_rawDescGZIP(), []int{13}
+	return file_weave_control_v1_control_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *LogLine) GetSource() string {
@@ -814,20 +977,30 @@ const file_weave_control_v1_control_proto_rawDesc = "" +
 	"\x0fRollbackRequest\x12\x1b\n" +
 	"\tmodule_id\x18\x01 \x01(\tR\bmoduleId\"8\n" +
 	"\x10RollbackResponse\x12$\n" +
-	"\x0erolled_back_to\x18\x01 \x01(\tR\frolledBackTo\"B\n" +
+	"\x0erolled_back_to\x18\x01 \x01(\tR\frolledBackTo\"\x0f\n" +
+	"\rReloadRequest\"\x97\x01\n" +
+	"\x0eReloadResponse\x12\x14\n" +
+	"\x05added\x18\x01 \x03(\tR\x05added\x12\x18\n" +
+	"\aremoved\x18\x02 \x03(\tR\aremoved\x12\x1a\n" +
+	"\breplaced\x18\x03 \x03(\tR\breplaced\x129\n" +
+	"\ainvalid\x18\x04 \x03(\v2\x1f.weave.control.v1.InvalidModuleR\ainvalid\"7\n" +
+	"\rInvalidModule\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
+	"\x06detail\x18\x02 \x01(\tR\x06detail\"B\n" +
 	"\vLogsRequest\x12\x1b\n" +
 	"\tmodule_id\x18\x01 \x01(\tR\bmoduleId\x12\x16\n" +
 	"\x06follow\x18\x02 \x01(\bR\x06follow\"N\n" +
 	"\aLogLine\x12\x16\n" +
 	"\x06source\x18\x01 \x01(\tR\x06source\x12\x12\n" +
 	"\x04line\x18\x02 \x01(\tR\x04line\x12\x17\n" +
-	"\atime_ms\x18\x03 \x01(\x03R\x06timeMs2\xe7\x03\n" +
+	"\atime_ms\x18\x03 \x01(\x03R\x06timeMs2\xb4\x04\n" +
 	"\x0eControlService\x12K\n" +
 	"\x06Status\x12\x1f.weave.control.v1.StatusRequest\x1a .weave.control.v1.StatusResponse\x12N\n" +
 	"\aModules\x12 .weave.control.v1.ModulesRequest\x1a!.weave.control.v1.ModulesResponse\x12Q\n" +
 	"\bSurfaces\x12!.weave.control.v1.SurfacesRequest\x1a\".weave.control.v1.SurfacesResponse\x12N\n" +
 	"\aInstall\x12 .weave.control.v1.InstallRequest\x1a!.weave.control.v1.InstallResponse\x12Q\n" +
-	"\bRollback\x12!.weave.control.v1.RollbackRequest\x1a\".weave.control.v1.RollbackResponse\x12B\n" +
+	"\bRollback\x12!.weave.control.v1.RollbackRequest\x1a\".weave.control.v1.RollbackResponse\x12K\n" +
+	"\x06Reload\x12\x1f.weave.control.v1.ReloadRequest\x1a .weave.control.v1.ReloadResponse\x12B\n" +
 	"\x04Logs\x12\x1d.weave.control.v1.LogsRequest\x1a\x19.weave.control.v1.LogLine0\x01B\xe4\x01\n" +
 	"\x14com.weave.control.v1B\fControlProtoP\x01Z\\github.com/weaveplatform/weaveplatform-agent-core/internal/gen/go/weave/control/v1;controlv1\xa2\x02\x03WCX\xaa\x02\x10Weave.Control.V1\xca\x02\x10Weave\\Control\\V1\xe2\x02\x1cWeave\\Control\\V1\\GPBMetadata\xea\x02\x12Weave::Control::V1b\x06proto3"
 
@@ -843,7 +1016,7 @@ func file_weave_control_v1_control_proto_rawDescGZIP() []byte {
 	return file_weave_control_v1_control_proto_rawDescData
 }
 
-var file_weave_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_weave_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_weave_control_v1_control_proto_goTypes = []any{
 	(*StatusRequest)(nil),    // 0: weave.control.v1.StatusRequest
 	(*StatusResponse)(nil),   // 1: weave.control.v1.StatusResponse
@@ -857,35 +1030,41 @@ var file_weave_control_v1_control_proto_goTypes = []any{
 	(*InstallResponse)(nil),  // 9: weave.control.v1.InstallResponse
 	(*RollbackRequest)(nil),  // 10: weave.control.v1.RollbackRequest
 	(*RollbackResponse)(nil), // 11: weave.control.v1.RollbackResponse
-	(*LogsRequest)(nil),      // 12: weave.control.v1.LogsRequest
-	(*LogLine)(nil),          // 13: weave.control.v1.LogLine
-	(*v1.ProtocolRange)(nil), // 14: weave.agent.v1.ProtocolRange
-	(*v1.Health)(nil),        // 15: weave.agent.v1.Health
-	(*v1.Surface)(nil),       // 16: weave.agent.v1.Surface
+	(*ReloadRequest)(nil),    // 12: weave.control.v1.ReloadRequest
+	(*ReloadResponse)(nil),   // 13: weave.control.v1.ReloadResponse
+	(*InvalidModule)(nil),    // 14: weave.control.v1.InvalidModule
+	(*LogsRequest)(nil),      // 15: weave.control.v1.LogsRequest
+	(*LogLine)(nil),          // 16: weave.control.v1.LogLine
+	(*v1.ProtocolRange)(nil), // 17: weave.agent.v1.ProtocolRange
+	(*v1.Health)(nil),        // 18: weave.agent.v1.Health
+	(*v1.Surface)(nil),       // 19: weave.agent.v1.Surface
 }
 var file_weave_control_v1_control_proto_depIdxs = []int32{
-	14, // 0: weave.control.v1.StatusResponse.protocol:type_name -> weave.agent.v1.ProtocolRange
-	15, // 1: weave.control.v1.ModuleStatus.health:type_name -> weave.agent.v1.Health
+	17, // 0: weave.control.v1.StatusResponse.protocol:type_name -> weave.agent.v1.ProtocolRange
+	18, // 1: weave.control.v1.ModuleStatus.health:type_name -> weave.agent.v1.Health
 	3,  // 2: weave.control.v1.ModulesResponse.modules:type_name -> weave.control.v1.ModuleStatus
-	16, // 3: weave.control.v1.ModuleSurfaces.surfaces:type_name -> weave.agent.v1.Surface
+	19, // 3: weave.control.v1.ModuleSurfaces.surfaces:type_name -> weave.agent.v1.Surface
 	6,  // 4: weave.control.v1.SurfacesResponse.modules:type_name -> weave.control.v1.ModuleSurfaces
-	0,  // 5: weave.control.v1.ControlService.Status:input_type -> weave.control.v1.StatusRequest
-	2,  // 6: weave.control.v1.ControlService.Modules:input_type -> weave.control.v1.ModulesRequest
-	5,  // 7: weave.control.v1.ControlService.Surfaces:input_type -> weave.control.v1.SurfacesRequest
-	8,  // 8: weave.control.v1.ControlService.Install:input_type -> weave.control.v1.InstallRequest
-	10, // 9: weave.control.v1.ControlService.Rollback:input_type -> weave.control.v1.RollbackRequest
-	12, // 10: weave.control.v1.ControlService.Logs:input_type -> weave.control.v1.LogsRequest
-	1,  // 11: weave.control.v1.ControlService.Status:output_type -> weave.control.v1.StatusResponse
-	4,  // 12: weave.control.v1.ControlService.Modules:output_type -> weave.control.v1.ModulesResponse
-	7,  // 13: weave.control.v1.ControlService.Surfaces:output_type -> weave.control.v1.SurfacesResponse
-	9,  // 14: weave.control.v1.ControlService.Install:output_type -> weave.control.v1.InstallResponse
-	11, // 15: weave.control.v1.ControlService.Rollback:output_type -> weave.control.v1.RollbackResponse
-	13, // 16: weave.control.v1.ControlService.Logs:output_type -> weave.control.v1.LogLine
-	11, // [11:17] is the sub-list for method output_type
-	5,  // [5:11] is the sub-list for method input_type
-	5,  // [5:5] is the sub-list for extension type_name
-	5,  // [5:5] is the sub-list for extension extendee
-	0,  // [0:5] is the sub-list for field type_name
+	14, // 5: weave.control.v1.ReloadResponse.invalid:type_name -> weave.control.v1.InvalidModule
+	0,  // 6: weave.control.v1.ControlService.Status:input_type -> weave.control.v1.StatusRequest
+	2,  // 7: weave.control.v1.ControlService.Modules:input_type -> weave.control.v1.ModulesRequest
+	5,  // 8: weave.control.v1.ControlService.Surfaces:input_type -> weave.control.v1.SurfacesRequest
+	8,  // 9: weave.control.v1.ControlService.Install:input_type -> weave.control.v1.InstallRequest
+	10, // 10: weave.control.v1.ControlService.Rollback:input_type -> weave.control.v1.RollbackRequest
+	12, // 11: weave.control.v1.ControlService.Reload:input_type -> weave.control.v1.ReloadRequest
+	15, // 12: weave.control.v1.ControlService.Logs:input_type -> weave.control.v1.LogsRequest
+	1,  // 13: weave.control.v1.ControlService.Status:output_type -> weave.control.v1.StatusResponse
+	4,  // 14: weave.control.v1.ControlService.Modules:output_type -> weave.control.v1.ModulesResponse
+	7,  // 15: weave.control.v1.ControlService.Surfaces:output_type -> weave.control.v1.SurfacesResponse
+	9,  // 16: weave.control.v1.ControlService.Install:output_type -> weave.control.v1.InstallResponse
+	11, // 17: weave.control.v1.ControlService.Rollback:output_type -> weave.control.v1.RollbackResponse
+	13, // 18: weave.control.v1.ControlService.Reload:output_type -> weave.control.v1.ReloadResponse
+	16, // 19: weave.control.v1.ControlService.Logs:output_type -> weave.control.v1.LogLine
+	13, // [13:20] is the sub-list for method output_type
+	6,  // [6:13] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_weave_control_v1_control_proto_init() }
@@ -899,7 +1078,7 @@ func file_weave_control_v1_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_weave_control_v1_control_proto_rawDesc), len(file_weave_control_v1_control_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   14,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
