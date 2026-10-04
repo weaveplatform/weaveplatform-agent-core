@@ -232,22 +232,37 @@ must not be read as "nothing installed" and stop every module.
 
 **Four triggers, one pass.** All of them end in the same reconcile:
 
-- **the directory watch** — inotify on Linux, on the modules directory and each module
-  directory in it, following directories as they come and go;
-- **SIGHUP** to weave-agent — `systemctl reload weave-agent` (`ExecReload`) signals weaveboot,
-  systemd's main pid, which forwards it to core;
+- **the directory watch** — on the modules directory and each module directory in it,
+  following directories as they come and go: inotify on Linux, kqueue on macOS (below);
+- **SIGHUP** to weave-agent — `systemctl reload weave-agent` (`ExecReload`) on Linux and
+  `launchctl kill HUP system/run.weaveplatform.agent` on macOS signal weaveboot, the service
+  manager's main process, which forwards it to core;
 - **`ControlService.Reload`** — `weavectl reload`, which answers with what the pass did:
   modules added, removed and replaced, and every module still invalid;
 - **the periodic rescan** — `--module-rescan` / `WEAVE_MODULE_RESCAN`, default one minute,
-  `0` to disable: the safety net for a change nothing reported, and for macOS and Windows,
-  which have no watch yet.
+  `0` to disable: the safety net for a change nothing reported, and for Windows, which has
+  no watch yet.
+
+**The macOS watch** (`internal/core/watch_darwin.go`) is kqueue `EVFILT_VNODE`. kqueue watches
+vnodes rather than names, and a directory's event says only that its entries changed, so the
+watch keeps a snapshot of each entry's name and inode in the modules directory and in each
+module directory, and a directory event counts only when that snapshot changed: an entry
+appeared, went, or was replaced by a rename (a new inode under the same name — the lifecycle
+manager's `current` flip, a binary swapped into place). The regular files directly in a module
+directory are watched as well, for a write in place, which changes no directory. Deeper levels
+(`versions/<v>/`) are not watched, as on Linux: a lifecycle install flips `current` last, and
+the rescan covers anything else. Each watched path holds one descriptor, opened `O_EVTONLY` so
+it never keeps a volume from unmounting.
 
 Passes are serialised, and the watch and SIGHUP go through a debounce: a trigger waits for
 half a second of quiet (and never more than five seconds in all), so a package's burst of
 file events is one pass. `weavectl reload` runs a pass at once and waits for its answer.
 
 **Never a half-written binary.** dpkg writes each file as `<name>.dpkg-new` and renames it
-into place, and the rename is atomic; the watch ignores `*.dpkg-*` names, and discovery only
+into place, and the rename is atomic; the watch ignores `*.dpkg-*` names (and on macOS every
+dot-name too: the lifecycle manager's `.tmp-*` staging, AppleDouble `._*` files, `.DS_Store`
+and any installer's hidden staging — the macOS installer itself stages in a sandbox outside the
+destination and moves finished files in), and discovery only
 ever opens the module's own file names. For anything that writes a binary in place, a pass
 hashes the binary between two `stat`s and, if it changed while being read, leaves that
 module alone and looks again after the debounce.
