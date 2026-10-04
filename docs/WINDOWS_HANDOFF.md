@@ -149,7 +149,7 @@ unix (the master key sits in `store.key`). Targets:
 
 Until these land, `keyprotect.New()` on unix returns the file protector; the
 startup directory-permission tightening (`internal/layout/tighten_unix.go`,
-`Ensure()` chmod 0700) is the interim gate.
+`Ensure()`: data directories 0700, the key and store 0600 files) is the interim gate.
 
 ## Summary for the Windows-host validator
 

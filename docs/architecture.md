@@ -129,7 +129,7 @@ sequenceDiagram
 ```
 
 All host-service auth is per-connection: the token rides every RPC as metadata, and the
-socket itself lives in a 0700 directory (SDDL-ACL'd pipe on Windows). A module cannot name,
+socket itself lives in the module's own 0700 directory (SDDL-ACL'd pipe on Windows). A module cannot name,
 let alone reach, another module's namespace.
 
 ## Supervision
@@ -263,8 +263,9 @@ The module still dials its host socket and presents its token. The socket must a
   ever); the run dir and `run/modules` become search-only for others (0711) so the user can
   traverse to its own dir without listing anyone else's; the host socket's peer-uid check
   admits root, core's uid and the module's uid. The binary is exec'd from a **root-owned,
-  read-only copy** under `run/bin/<id>/` — the installed tree is 0700 root — and that copy is
-  what gets verified, so the user cannot swap it between verification and exec. The same
+  read-only copy** under `exec/<id>/` in the state directory — the installed tree is 0700
+  root — and that copy is what gets verified, so the user cannot swap it between
+  verification and exec ([Filesystem layout](#filesystem-layout)). The same
   applies to `service`-privilege modules when core runs as root, which could not reach
   their binaries or sockets either before this.
 - **Windows** — the host pipe's SDDL adds `(A;;GRGW;;;<user SID>)` to the SYSTEM and
@@ -332,6 +333,49 @@ stateDiagram-v2
     crashed --> revert: 3 early exits —<br/>flip current back to previous
     revert --> run
 ```
+
+## Filesystem layout
+
+`internal/layout` resolves every directory core uses. The platform defaults come from
+`internal/platform`; `--state-dir` (or `WEAVE_STATE_DIR`) moves the whole tree under one
+root, which is how weaveboot always starts core — so on a packaged Linux install the run and
+log directories are `/var/lib/weave/run` and `/var/lib/weave/logs`, not the platform's
+`/run/weave` and `/var/log/weave`. Nothing below depends on which of the two it is.
+
+| Directory | Linux | macOS | Windows | unix mode |
+|---|---|---|---|---|
+| `StateDir` | `/var/lib/weave` | `/Library/Application Support/Weave` | `%ProgramData%\Weave` | `0711` |
+| `RunDir` — sockets | `/run/weave` | `/var/run/weave` | `StateDir\run` | `0711` |
+| `ExecDir` — staged module binaries | `StateDir/exec` | `StateDir/exec` | `StateDir\exec` (unused) | `0711` |
+| `LogDir` | `/var/log/weave` | `/Library/Logs/Weave` | `StateDir\logs` | `0700` |
+| `StagingDir`, `ModulesDir`, `core/` | under `StateDir` | under `StateDir` | under `StateDir` | `0700` |
+
+With `--state-dir <root>` every row is `<root>/<name>` (`run`, `exec`, `logs`, `staging`,
+`modules`). `layout.Ensure` creates each directory and holds it at exactly that mode on every
+start, in both directions: it closes a `0755` left by an installer and opens a `0700` left by
+an older core.
+
+The model, for a module that runs as another identity — a `service` module dropped to the
+`weave-agent` (`_weaveagent` on macOS) account, or a per-user module dropped to the console
+user:
+
+- **Data is private.** Logs, staged artifacts, installed modules and core's own versions are
+  `0700` root; the store and its sealed key are `0600` files directly in `StateDir`. Search
+  permission on `StateDir` lets another identity reach a path it already knows, never list
+  the directory or read those files.
+- **The binary it runs is staged in `ExecDir/<id>/`**: a fresh root-owned `0555` copy in a
+  root-owned `0755` directory, made, verified, then exec'd. The module's identity can read
+  and execute it but not replace it between verification and exec. `ExecDir` is search-only,
+  so no module lists another's copy.
+- **`ExecDir` is under `StateDir`, never `RunDir`.** `RunDir` is `/run` on Linux, which
+  Ubuntu and most distributions mount `noexec`; a binary staged there cannot be exec'd by
+  anyone. The state volume is where core itself already executes from (`StateDir/core`).
+- **Its socket dir is `RunDir/modules/<id>/`**, `0700` and chowned to the module's identity;
+  `RunDir` and `RunDir/modules` are search-only, so it reaches its own dir and nobody else's.
+  The control socket in `RunDir` is a `0600` root socket whose peer uid must be root or core.
+- **Windows** holds the same boundaries with ACLs rather than modes: the installer protects
+  `StateDir` to SYSTEM and Administrators, a module's image is opened with core's access by
+  `CreateProcessAsUser` (so nothing is staged), and host endpoints are SDDL'd pipes.
 
 ## Core's internal layout
 
