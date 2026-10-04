@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.5](https://github.com/weaveplatform/weaveplatform-agent-core/compare/v0.9.4...v0.9.5) (2026-10-04)
+
+
+### Bug Fixes
+
+* **verify:** pass the macOS code requirement to codesign inline ([b48a737](https://github.com/weaveplatform/weaveplatform-agent-core/commit/b48a7375865da6fd3b355de66653e76d92294433))
+* **verify:** pass the macOS code requirement to codesign inline ([0b20517](https://github.com/weaveplatform/weaveplatform-agent-core/commit/0b205179ad3e106c632b1e819aa10c141ebcd485))
+
 ## [0.9.4](https://github.com/weaveplatform/weaveplatform-agent-core/compare/v0.9.3...v0.9.4) (2026-10-04)
 
 
