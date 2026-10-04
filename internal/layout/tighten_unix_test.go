@@ -8,25 +8,54 @@ import (
 	"testing"
 )
 
-// MkdirAll does not chmod an existing directory; Ensure must, or an
-// installer's 0755 StateDir silently opens the store and sockets.
-func TestEnsureTightensAPreexistingDirectory(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "state")
-	if err := os.Mkdir(root, 0o755); err != nil {
+// MkdirAll does not chmod an existing directory; Ensure must, in both
+// directions: an installer's 0755 StateDir must lose its listing, and an
+// older core's 0700 must open to traversal or dropped modules cannot exec.
+func TestEnsureHoldsEachDirectoryAtItsMode(t *testing.T) {
+	for _, pre := range []os.FileMode{0o755, 0o700, 0o777} {
+		root := filepath.Join(t.TempDir(), "state")
+		l := Resolve(root)
+		for _, d := range l.dirs() {
+			if err := os.MkdirAll(d.path, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(d.path, pre); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := l.Ensure(); err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range l.dirs() {
+			fi, err := os.Stat(d.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fi.Mode().Perm() != d.mode {
+				t.Fatalf("from %04o: %s mode %04o, want %04o", pre, d.path, fi.Mode().Perm(), d.mode)
+			}
+		}
+	}
+}
+
+// A fresh tree comes out the same as a repaired one: StateDir, RunDir and
+// ExecDir search-only for others, everything else private.
+func TestEnsureFreshTreeModes(t *testing.T) {
+	l := Resolve(filepath.Join(t.TempDir(), "state"))
+	if err := l.Ensure(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := Resolve(root).Ensure(); err != nil {
-		t.Fatal(err)
-	}
-	fi, err := os.Stat(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fi.Mode().Perm() != 0o700 {
-		t.Fatalf("StateDir mode %04o, want 0700", fi.Mode().Perm())
+	for path, want := range map[string]os.FileMode{
+		l.StateDir: 0o711, l.RunDir: 0o711, l.ExecDir: 0o711,
+		l.LogDir: 0o700, l.StagingDir: 0o700, l.ModulesDir: 0o700,
+	} {
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm() != want {
+			t.Fatalf("%s mode %04o, want %04o", path, fi.Mode().Perm(), want)
+		}
 	}
 }
 

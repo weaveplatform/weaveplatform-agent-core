@@ -175,22 +175,25 @@ func (t *target) close() {}
 
 // stageBinary returns the path to exec. A module that runs as someone else
 // cannot reach its binary where it is installed: the state tree is 0700
-// root. It gets a root-owned, read-only copy under the run dir instead —
-// root-owned so the user it runs as cannot swap it between verification and
-// exec, which would hand them the module's host-service identity.
+// root. It gets a root-owned, read-only copy under the layout's ExecDir
+// instead — root-owned so the user it runs as cannot swap it between
+// verification and exec, which would hand them the module's host-service
+// identity. ExecDir is under the state dir rather than the run dir because
+// /run is noexec on most Linux distributions.
 func (t *target) stageBinary(bin string) (string, error) {
 	if t.drop == nil {
 		return bin, nil
 	}
-	dir := filepath.Join(t.layout.RunDir, "bin", t.m.ID)
+	dir := t.layout.ModuleExecDir(t.m.ID)
 	if err := os.RemoveAll(dir); err != nil {
 		return "", fmt.Errorf("clearing staging dir: %w", err)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("creating staging dir: %w", err)
 	}
-	// MkdirAll leaves an existing run/bin as it was; it must be searchable.
-	if err := os.Chmod(filepath.Dir(dir), 0o755); err != nil {
+	// MkdirAll leaves an existing ExecDir as it was; it must be searchable,
+	// and is no more than that, so no module can list another's copy.
+	if err := os.Chmod(filepath.Dir(dir), 0o711); err != nil {
 		return "", fmt.Errorf("opening staging dir: %w", err)
 	}
 	staged := filepath.Join(dir, filepath.Base(bin))
@@ -224,9 +227,10 @@ func copyExecutable(src, dst string) error {
 // in, and dial host.sock inside, the per-module socket dir. Core owns the
 // dir 0700; without the chown a dropped module EACCESes. The run dir and
 // run/modules above it become search-only for others (0711): a dropped
-// module must traverse them to reach its own dir and its staged binary,
-// while listing them — and every other module's socket dir, still 0700 —
-// stays closed. No-op when not dropping.
+// module must traverse them to reach its own dir, while listing them — and
+// every other module's socket dir, still 0700 — stays closed. (layout.Ensure
+// already holds the run dir there; repeating it costs nothing.) No-op when
+// not dropping.
 func (t *target) prepareSocketDir(dir, hostAddr string) error {
 	if t.drop == nil {
 		return nil

@@ -1,6 +1,7 @@
 // Package controlsock serves ControlService: the one endpoint for weavectl
-// and, later, the portal. Access control is the socket itself — RunDir is
-// 0700, so opening it is the authorisation.
+// and, later, the portal. Access control is the socket itself: it is 0600
+// root, inside a RunDir others can traverse but not list, and every
+// connection's peer uid must be root or core's own.
 package controlsock
 
 import (

@@ -18,7 +18,7 @@ then runs:
    replaced wholesale; it is package-owned, like `/usr/lib/weave/modules`.
 3. Creates `%ProgramData%\Weave` (the state root, `internal/platform`) and replaces its ACL
    with SYSTEM + Administrators full control, protected from inheritance and pushed
-   down to anything already inside. This is the Windows reading of the `0700` that
+   down to anything already inside. This is the Windows reading of the modes that
    `layout.Ensure` enforces on unix, where `tighten_windows.go` is a no-op.
 4. With `-ChannelKey`, validates the file as one base64 Ed25519 public key and writes it
    to `%ProgramData%\weave\channel.pub` — where core looks when it has no `--channel-pub`

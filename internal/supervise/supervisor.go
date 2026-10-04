@@ -293,8 +293,7 @@ func (s *Supervisor) Replace(spec Spec) error {
 // SweepOrphans clears leftover per-module socket dirs and staged binaries
 // from a previous core instance. Call once, before any Add.
 func (s *Supervisor) SweepOrphans() {
-	for _, sub := range []string{"modules", "bin"} {
-		dir := filepath.Join(s.Layout.RunDir, sub)
+	for _, dir := range []string{filepath.Join(s.Layout.RunDir, "modules"), s.Layout.ExecDir} {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			continue

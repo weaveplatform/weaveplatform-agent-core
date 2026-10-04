@@ -163,8 +163,19 @@ func TestDroppedTargetPreparesTheTree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stageBinary: %v", err)
 	}
-	if staged == src || !strings.HasPrefix(staged, tgt.layout.RunDir) {
+	if staged != filepath.Join(tgt.layout.ModuleExecDir("testmod"), "mod") {
 		t.Fatalf("staged at %s", staged)
+	}
+	// Search-only for others: the dropped module reaches its own copy and
+	// cannot list anyone else's. The copy's own dir is readable so the
+	// loader can open it; nothing but root can write either.
+	for d, want := range map[string]os.FileMode{
+		tgt.layout.ExecDir:   0o711,
+		filepath.Dir(staged): 0o755,
+	} {
+		if fi, err := os.Stat(d); err != nil || fi.Mode().Perm() != want {
+			t.Fatalf("%s mode %v err=%v, want %04o", d, fi.Mode().Perm(), err, want)
+		}
 	}
 	fi, err := os.Stat(staged)
 	if err != nil || fi.Mode().Perm() != 0o555 {
@@ -221,15 +232,18 @@ func TestStageBinaryFailures(t *testing.T) {
 	if err := os.WriteFile(src, nil, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	// run/bin is a file: the staging dir cannot be made.
-	if err := os.WriteFile(filepath.Join(tgt.layout.RunDir, "bin"), nil, 0o600); err != nil {
+	// ExecDir is a file: the staging dir cannot be made.
+	if err := os.Remove(tgt.layout.ExecDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tgt.layout.ExecDir, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tgt.stageBinary(src); err == nil {
 		t.Fatal("staged under a file")
 	}
 	// A source that is a directory opens but cannot be copied.
-	if err := os.Remove(filepath.Join(tgt.layout.RunDir, "bin")); err != nil {
+	if err := os.Remove(tgt.layout.ExecDir); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tgt.stageBinary(t.TempDir()); err == nil {

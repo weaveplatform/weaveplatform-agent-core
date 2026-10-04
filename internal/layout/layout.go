@@ -27,6 +27,13 @@ type Layout struct {
 	StagingDir string
 	// ModulesDir: installed module versions.
 	ModulesDir string
+	// ExecDir: root-owned copies of module binaries that run as another
+	// identity (a service account, a console user), which cannot reach the
+	// 0700 tree the originals are installed in. It is always under StateDir,
+	// never RunDir: RunDir is /run on Linux, which distributions mount
+	// noexec, and the state volume is where the system already executes
+	// core itself from (StateDir/core).
+	ExecDir string
 }
 
 // Resolve returns the layout, honouring override (highest precedence) then
@@ -42,6 +49,7 @@ func Resolve(override string) Layout {
 			RunDir:     filepath.Join(override, "run"),
 			StagingDir: filepath.Join(override, "staging"),
 			ModulesDir: filepath.Join(override, "modules"),
+			ExecDir:    filepath.Join(override, "exec"),
 		}
 	}
 	p := platform.Paths()
@@ -51,21 +59,54 @@ func Resolve(override string) Layout {
 		RunDir:     p.RunDir,
 		StagingDir: p.StagingDir,
 		ModulesDir: filepath.Join(p.StateDir, "modules"),
+		ExecDir:    filepath.Join(p.StateDir, "exec"),
 	}
 }
 
-// Ensure creates every directory with owner-only permissions AND tightens
-// any that already exist but are too permissive. MkdirAll does not chmod an
-// existing directory, so an installer that created StateDir 0755 would
-// silently break the "0700 is the gate" assumption the store and sockets
-// rely on; the explicit chmod repairs that. RunDir holds sockets: 0700 is
-// access control, not decoration.
+// Access modes for the layout's directories (unix; ACLs govern Windows).
+const (
+	// modePrivate: owner only. Everything that holds data — logs, staged
+	// artifacts, installed modules, core's versions — is this.
+	modePrivate os.FileMode = 0o700
+	// modeTraverse: search-only for others. A module dropped to another
+	// identity must walk through StateDir to its staged binary and through
+	// RunDir to its socket dir, and nothing more: it cannot list either, and
+	// what it reaches below is 0700 or root-owned read-only. The store and
+	// key directly under StateDir are 0600 files, so traversal grants no
+	// access to them.
+	modeTraverse os.FileMode = 0o711
+)
+
+// dirMode is one directory Ensure manages and the mode it holds it at.
+type dirMode struct {
+	path string
+	mode os.FileMode
+}
+
+// dirs is every directory Ensure manages, parents first.
+func (l Layout) dirs() []dirMode {
+	return []dirMode{
+		{l.StateDir, modeTraverse},
+		{l.LogDir, modePrivate},
+		{l.RunDir, modeTraverse},
+		{l.StagingDir, modePrivate},
+		{l.ModulesDir, modePrivate},
+		{l.ExecDir, modeTraverse},
+	}
+}
+
+// Ensure creates every directory and sets its mode, including on one that
+// already exists: MkdirAll does not chmod an existing directory, so an
+// installer that created StateDir 0755 would silently leave it listable,
+// and a 0700 left by an older core would lock out the identities modules
+// drop to. Each directory is held at exactly its mode — private, or
+// search-only for others where a dropped module must pass through.
 func (l Layout) Ensure() error {
-	for _, d := range []string{l.StateDir, l.LogDir, l.RunDir, l.StagingDir, l.ModulesDir} {
-		if err := os.MkdirAll(d, 0o700); err != nil {
-			return fmt.Errorf("layout: create %s: %w", d, err)
+	for _, d := range l.dirs() {
+		if err := os.MkdirAll(d.path, modePrivate); err != nil {
+			return fmt.Errorf("layout: create %s: %w", d.path, err)
 		}
-		if err := tightenDir(d); err != nil {
+		if err := setDirMode(d.path, d.mode); err != nil {
 			return err
 		}
 	}
@@ -89,4 +130,9 @@ func (l Layout) PolicyFile() string {
 // ModuleRunDir is the per-module socket directory.
 func (l Layout) ModuleRunDir(id string) string {
 	return filepath.Join(l.RunDir, "modules", id)
+}
+
+// ModuleExecDir is where one module's staged binary lives.
+func (l Layout) ModuleExecDir(id string) string {
+	return filepath.Join(l.ExecDir, id)
 }

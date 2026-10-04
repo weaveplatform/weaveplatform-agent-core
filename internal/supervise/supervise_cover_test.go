@@ -186,7 +186,7 @@ func TestSweepOrphans(t *testing.T) {
 	sup := newTestSupervisor(t)
 	sup.SweepOrphans() // nothing there yet
 	stale := sup.Layout.ModuleRunDir("old")
-	staged := filepath.Join(sup.Layout.RunDir, "bin", "old")
+	staged := sup.Layout.ModuleExecDir("old")
 	for _, d := range []string{stale, staged} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			t.Fatal(err)

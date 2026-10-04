@@ -15,8 +15,8 @@ func TestControlAuthorizerAdmitsOnlyRootAndSelf(t *testing.T) {
 	for _, p := range []ipc.PeerCred{
 		{UID: 0, HasUID: true},
 		{UID: self, HasUID: true},
-		// Platforms that cannot report a peer uid fall back to the 0700
-		// RunDir as the gate.
+		// Platforms that cannot report a peer uid fall back to the 0600
+		// socket file as the gate.
 		{HasUID: false},
 	} {
 		if err := auth(p); err != nil {
