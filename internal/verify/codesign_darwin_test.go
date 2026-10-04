@@ -70,3 +70,23 @@ func TestCodesignRefusesPlatformBinary(t *testing.T) {
 		t.Fatal("platform binary with no team identifier accepted")
 	}
 }
+
+// The requirement must reach the real codesign as an inline requirement. A
+// binary that does not match the team is then refused for failing the
+// requirement, never because codesign could not read it.
+func TestCodesignVerifyEvaluatesTheRequirement(t *testing.T) {
+	if _, err := os.Stat(codesignPath); err != nil {
+		t.Skip("no codesign on this host")
+	}
+	err := codesignVerify("/usr/bin/true", testManifest("ABCDE12345"))
+	if err == nil {
+		t.Fatal("an Apple platform binary satisfied a third-party team requirement")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "invalid requirement") || strings.Contains(msg, "No such file") {
+		t.Fatalf("codesign could not read the requirement: %v", err)
+	}
+	if !strings.Contains(msg, "failed to satisfy") {
+		t.Fatalf("want a requirement failure, got: %v", err)
+	}
+}
