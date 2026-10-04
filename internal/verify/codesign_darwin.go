@@ -64,7 +64,9 @@ func codesignVerify(path string, m *manifest.Manifest) error {
 	// "-R=<text>" is an inline requirement; a separate "-R" argument is read as a
 	// file path to a compiled requirement, which never exists.
 	ctx := context.Background()
-	verify := exec.CommandContext(ctx, codesignPath, "--verify", "--strict=all", "-R="+req, path) //nolint:gosec // G204: req is built from a teamIDRe-validated team id; no shell is involved
+	// req is built from a teamIDRe-validated team id; no shell is involved.
+	verify := exec.CommandContext( //nolint:gosec // G204: see above
+		ctx, codesignPath, "--verify", "--strict=all", "-R="+req, path)
 	var verr bytes.Buffer
 	verify.Stderr = &verr
 	if err := verify.Run(); err != nil {
