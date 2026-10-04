@@ -491,6 +491,7 @@ user:
 | `internal/policy` | read the local policy file on change, cache the last good document in the store, wake Watch streams on change ([Policy](#policy)) |
 | `internal/identity` | Ed25519 device identity behind a Provider seam, local to the machine; per-module scoped credentials (fail closed today) |
 | `internal/transport` | the host channel peer, durable offline queue |
+| `internal/provision` | the channel trust anchor from a `WEAVEPROV` provisioning volume, only while none is installed ([Authentication](#authentication)) |
 | `internal/lifecycle` | staged install, health-gated promote, N-1 retention, rollback |
 | `internal/manifestverify` | two-tier Ed25519 chain verification for channel manifests |
 | `internal/capability` | the one host probe at startup that gates module launch |
@@ -646,13 +647,51 @@ off, run a command in it, read its inventory — so the channel authenticates it
 peer before honouring any of that. Without it the boundary is "whoever got to the
 file descriptor first", which is not a boundary.
 
-The guest holds an Ed25519 public key placed in its image at build time
-(`/etc/weave/channel.pub`, or `--channel-pub`); the host holds the private half in
-the VM's directory. The guest issues a single-use nonce, the host signs it, the
+The guest holds an Ed25519 public key (`/etc/weave/channel.pub`,
+`%ProgramData%\weave\channel.pub` on Windows, or `--channel-pub`); the host holds the
+private half in the VM's directory. The guest issues a single-use nonce, the host signs it, the
 guest checks the signature against the key it already trusts. The frames and the
 signing message live in `internal/protocol/hvchannel` (and the module SDK's copy) for the same
 reason the framing does: both ends must build them identically and nothing on this wire would
 catch a mismatch.
+
+**The key — the trust anchor — only ever arrives out of band**, from boot media the host
+supplies: baked into the image, written by a cloud-init seed (Linux), or copied from a
+provisioning volume (macOS and Windows, which have no cloud-init). Nothing on the channel
+sets or changes it, authenticated or not. An in-band rekey was considered and rejected: a
+stolen key could use it to persist and lock the owner out, and it would put a trust-changing
+operation on the one wire an attacker on the host can reach.
+
+**The provisioning volume** (`internal/provision`) is a read-only filesystem labelled
+`WEAVEPROV` holding `weave/channel.pub`. At start, before the channel loads its key, and
+**only if nothing is at the anchor path**, core reads the key, validates it exactly as the
+channel loads keys (one standard-base64 Ed25519 key), and installs it: written in full to a
+temporary sibling, made `0644` root (on Windows a protected ACL: SYSTEM and Administrators
+full, Users read), then hard-linked into place. A link, unlike a rename, fails if the anchor
+exists, so even an anchor that appeared a moment earlier is never replaced, and the anchor
+never exists half-written. Core logs the key's fingerprint (`sha256:` and the hex SHA-256 of
+the 32 key bytes).
+
+- **Anything at the anchor path ends it**, valid key or not; the volume is not read. A guest
+  whose anchor is wrong is fixed by whoever administers it, not by media.
+- **Where it looks.** macOS: `/Volumes/WEAVEPROV`, which must be the root of a read-only
+  mount made by the system (statfs: the mount point, `MNT_RDONLY`, owner uid 0) — a directory
+  someone made, or a disk image a user attached with `hdiutil`, is refused. Windows: the drive
+  whose volume label is `WEAVEPROV`, read-only (`FILE_READ_ONLY_VOLUME`). Linux: a filesystem
+  udev lists under `/dev/disk/by-label/WEAVEPROV` that is already mounted read-only; core does
+  not mount it, since Linux guests have cloud-init. Two such volumes are refused rather than
+  chosen between. The host must attach the volume read-only.
+- **A volume mounted late.** macOS mounts an attached disk some seconds into boot, often after
+  core has started. If there is neither an anchor nor a volume at start, core looks again every
+  2 seconds for 3 minutes, then stops for good: an unprovisioned guest is a legitimate state
+  and is not polled for. The channel, which found no key, reads the anchor path again when a
+  host next authenticates, keeps the first key it finds, and never replaces it while it runs.
+- **A key it will not trust** (not base64, not 32 bytes, over 4 KiB, a symlink, missing) is
+  logged and provisioning stops; the channel stays closed, as for any unprovisioned guest.
+
+What this does not defend against: an administrator in the guest, who can write the anchor
+directly; and, during the minutes before an unprovisioned guest's anchor is installed, a
+process that can mount a filesystem as root. Both already control the guest.
 
 Scope is **per VM**, not per host. A process able to drive VM A therefore cannot
 drive VM B, which one host-wide key would have allowed the moment it leaked.

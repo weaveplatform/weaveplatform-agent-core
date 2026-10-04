@@ -25,6 +25,7 @@ import (
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/policy"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/protocol/handshake"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/protocol/manifest"
+	"github.com/weaveplatform/weaveplatform-agent-core/internal/provision"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/registry"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/store"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/store/keyprotect"
@@ -46,6 +47,11 @@ var (
 	// watchDir is the modules directory watch; a test of the other reload
 	// triggers turns it off so it cannot be the one that fired.
 	watchDir = watchModules
+	// provisionAnchor installs the channel trust anchor from boot media when
+	// there is none.
+	provisionAnchor = func(ctx context.Context, log *slog.Logger, anchor string) {
+		(&provision.Provisioner{Log: log, AnchorPath: anchor}).Start(ctx)
+	}
 )
 
 // errNoVerifier is what refuseUnverified answers for every binary.
@@ -168,6 +174,16 @@ func Run(ctx context.Context, opts Options) error {
 	if err := ident.Init(); err != nil { //nolint:contextcheck // identity.Provider.Init has no context parameter
 		return fmt.Errorf("identity: %w", err)
 	}
+
+	// Before the channel loads its key: a provisioning volume already mounted
+	// becomes the anchor the channel starts with, and one mounted later is
+	// picked up when a host next authenticates (transport.trustAnchor). Only
+	// ever while there is no anchor — see internal/provision.
+	anchor := opts.ChannelPubPath
+	if anchor == "" {
+		anchor = transport.DefaultChannelKeyPath()
+	}
+	provisionAnchor(ctx, log, anchor)
 
 	// The one table of installed modules: the supervisor writes it; transport
 	// delivery, the host channel, RegistryService and ControlService read it.
