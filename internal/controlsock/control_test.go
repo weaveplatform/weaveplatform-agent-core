@@ -273,3 +273,36 @@ func TestDialRejectsAnUnusableAddress(t *testing.T) {
 		t.Fatal("Dial accepted an address with a NUL in it")
 	}
 }
+
+// Reload hands the request to core's reloader and its answer back; with none
+// configured, and when the reload fails, the client is told so.
+func TestReloadHandler(t *testing.T) {
+	ctx := context.Background()
+	if _, err := (&Server{}).Reload(
+		ctx,
+		&controlv1.ReloadRequest{},
+	); status.Code(
+		err,
+	) != codes.Unimplemented {
+		t.Fatalf("no reloader: %v", err)
+	}
+	failing := &Server{Reloader: func(context.Context) (*controlv1.ReloadResponse, error) {
+		return nil, io.ErrUnexpectedEOF
+	}}
+	if _, err := failing.Reload(
+		ctx,
+		&controlv1.ReloadRequest{},
+	); status.Code(
+		err,
+	) != codes.FailedPrecondition ||
+		!strings.Contains(err.Error(), io.ErrUnexpectedEOF.Error()) {
+		t.Fatalf("failing reloader: %v", err)
+	}
+	want := &controlv1.ReloadResponse{Added: []string{"m"}}
+	ok := &Server{
+		Reloader: func(context.Context) (*controlv1.ReloadResponse, error) { return want, nil },
+	}
+	if got, err := ok.Reload(ctx, &controlv1.ReloadRequest{}); err != nil || got != want {
+		t.Fatalf("reload = %v, %v", got, err)
+	}
+}

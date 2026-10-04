@@ -8,7 +8,6 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -44,6 +43,9 @@ var Window = handshake.Window{Min: 1, Max: 1}
 var (
 	probeCapabilities = capability.ProbeWith
 	controlAddr       = layout.Layout.ControlSocket
+	// watchDir is the modules directory watch; a test of the other reload
+	// triggers turns it off so it cannot be the one that fired.
+	watchDir = watchModules
 )
 
 // errNoVerifier is what refuseUnverified answers for every binary.
@@ -91,11 +93,21 @@ type Options struct {
 	// capability.Channel. A value core cannot honour disables the channel
 	// rather than core.
 	Channel string
-	Log     *slog.Logger
+	// ModuleRescan is how often the modules directory is reread whatever
+	// else has or has not reported a change. Zero disables it.
+	ModuleRescan time.Duration
+	// Reload receives a value each time something outside core (SIGHUP)
+	// asks for the modules directory to be reread. Nil: nothing does.
+	Reload <-chan struct{}
+	Log    *slog.Logger
 }
 
 // Run starts core and blocks until ctx ends.
 func Run(ctx context.Context, opts Options) error {
+	// Everything Run starts ends when it returns, on an error path too: a
+	// failed start must not leave the reload loop or the watch running.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	log := opts.Log
 	if log == nil {
 		log = slog.Default()
@@ -214,28 +226,14 @@ func Run(ctx context.Context, opts Options) error {
 	sup.SetBaseContext(ctx)
 	sup.SweepOrphans()
 
-	specs, err := discoverModules(modulesDir)
-	if err != nil {
-		return err
-	}
-	if len(specs) == 0 {
-		log.Warn("no modules found", "dir", modulesDir)
-	}
-	for _, spec := range specs {
-		if !spec.Manifest.SupportsHost(runtime.GOOS, runtime.GOARCH) {
-			log.Warn("module does not support this host; skipping",
-				"module", spec.Manifest.ID, "os", runtime.GOOS, "arch", runtime.GOARCH)
-			continue
-		}
-		// Add only registers; modules run on the base context set above.
-		if err := sup.Add(spec); err != nil { //nolint:contextcheck // Add has no context parameter
-			log.Error("registering module failed", "module", spec.Manifest.ID, "err", err)
-		}
-	}
-
+	// The lifecycle manager installs where core discovers: --modules-dir
+	// moves both, or a channel install would land somewhere no reload looks
+	// and the next one would stop it.
+	lcmLayout := lay
+	lcmLayout.ModulesDir = modulesDir
 	lcm := &lifecycle.Manager{
 		Log:         log,
-		Layout:      lay,
+		Layout:      lcmLayout,
 		Verifier:    verifier,
 		Supervisor:  sup,
 		ManifestURL: opts.ManifestURL,
@@ -250,6 +248,49 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	lcm.RootPub = rootPub
 
+	rec := &reconciler{
+		log:    log,
+		dir:    modulesDir,
+		sup:    sup,
+		lock:   lcm,
+		rescan: opts.ModuleRescan,
+	}
+	// Start-up is the first reload pass. One module that cannot run is
+	// recorded invalid and the rest start; a modules directory core cannot
+	// read at all stops core instead. That is a broken install, not an empty
+	// one, and a core that came up with no modules would look healthy to
+	// weaveboot and systemd while running nothing. A later pass that cannot
+	// read it changes nothing and says so.
+	diff, err := rec.reconcile() //nolint:contextcheck // modules run on the base context set above
+	if err != nil {
+		return err
+	}
+	if len(diff.Added) == 0 && len(diff.Invalid) == 0 {
+		log.Warn("no modules found", "dir", modulesDir)
+	}
+	recDone := make(chan struct{})
+	go func() {
+		defer close(recDone)
+		rec.run(ctx)
+	}()
+	go watchDir(ctx, log, modulesDir, rec.trigger)
+	if opts.Reload != nil {
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case _, ok := <-opts.Reload:
+					if !ok {
+						return
+					}
+					log.Info("module reload requested")
+					rec.trigger()
+				}
+			}
+		}()
+	}
+
 	ctl := &controlsock.Server{
 		Log:        log,
 		Supervisor: sup,
@@ -257,6 +298,7 @@ func Run(ctx context.Context, opts Options) error {
 		Window:     Window,
 		Identity:   ident,
 		StartedAt:  time.Now(),
+		Reloader:   rec.reload,
 	}
 	ctlErr := make(chan error, 1)
 	go func() { ctlErr <- ctl.Serve(ctx, controlAddr(lay)) }()
@@ -267,16 +309,20 @@ func Run(ctx context.Context, opts Options) error {
 	// uptime timer — a core that reaches here proves it loads and configures.
 	signalReady(log)
 
+	var runErr error
 	select {
 	case <-ctx.Done():
 	case err := <-ctlErr:
 		if err != nil {
-			return fmt.Errorf("control socket: %w", err)
+			runErr = fmt.Errorf("control socket: %w", err)
 		}
 	}
 	log.Info("core stopping")
+	cancel()
+	// A pass in flight could Add a module after Wait has taken its list.
+	<-recDone
 	sup.Wait()
-	return nil
+	return runErr
 }
 
 // manifestRootKey returns the channel manifest root key, or nil when none is
@@ -340,63 +386,6 @@ func signalReady(log *slog.Logger) {
 		log.Warn("publishing readiness marker failed", "err", err)
 		_ = os.Remove(tmp) //nolint:gosec // path set by weaveboot
 	}
-}
-
-// discoverModules scans dir for <id>/module.manifest.json + binary. The
-// binary is named after the module id (<id>.exe on Windows), or "module"
-// as a fallback.
-func discoverModules(dir string) ([]supervise.Spec, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("reading modules dir: %w", err)
-	}
-	var specs []supervise.Spec
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		mdir := filepath.Join(dir, e.Name())
-		// Versioned layout (installed by the lifecycle manager): a
-		// `current` file names the active version directory.
-		if cur, err := os.ReadFile(filepath.Join(mdir, "current")); err == nil {
-			v := strings.TrimSpace(string(cur))
-			if !isVersionDir(v) {
-				// Treated as a version with no manifest: skipped.
-				continue
-			}
-			mdir = filepath.Join(mdir, "versions", v)
-		}
-		mpath := filepath.Join(mdir, "module.manifest.json")
-		m, err := manifest.Load(mpath)
-		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				continue
-			}
-			return nil, fmt.Errorf("module %s: %w", e.Name(), err)
-		}
-		bin := ""
-		for _, cand := range binaryCandidates(m.ID) {
-			p := filepath.Join(mdir, cand)
-			// p is built from the modules directory's own listing.
-			if fi, err := os.Stat(p); err == nil && !fi.IsDir() { //nolint:gosec // see above
-				bin = p
-				break
-			}
-		}
-		if bin == "" {
-			return nil, fmt.Errorf("module %s: %w in %s", m.ID, errNoBinary, mdir)
-		}
-		var config []byte
-		cfgPath := filepath.Join(mdir, "config.json")
-		if b, err := os.ReadFile(cfgPath); err == nil { //nolint:gosec // see p above
-			config = b
-		}
-		specs = append(specs, supervise.Spec{Manifest: m, BinPath: bin, Config: config})
-	}
-	return specs, nil
 }
 
 // isVersionDir reports whether v names exactly one directory under versions/:

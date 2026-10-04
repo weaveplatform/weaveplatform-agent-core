@@ -29,7 +29,8 @@ type Layout struct {
 	ModulesDir string
 	// ExecDir: root-owned copies of module binaries that run as another
 	// identity (a service account, a console user), which cannot reach the
-	// 0700 tree the originals are installed in. It is always under StateDir,
+	// 0700 tree the originals are installed in — and on Windows of every
+	// module, so a running one never locks its install. It is always under StateDir,
 	// never RunDir: RunDir is /run on Linux, which distributions mount
 	// noexec, and the state volume is where the system already executes
 	// core itself from (StateDir/core).

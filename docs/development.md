@@ -66,7 +66,27 @@ echo '{"revision":1,"modules":{"weave-linux-presence":{"interval_seconds":60}}}'
 # Install / hot-swap / roll back
 /tmp/wv/weavectl -socket ... install -local ./path-to-module-dir
 /tmp/wv/weavectl -socket ... rollback weave-linux-presence
+
+# Reread the modules directory after changing it by hand
+/tmp/wv/weavectl -socket ... reload
 ```
+
+Core rereads the modules directory while it runs, so a module laid out, rebuilt or deleted
+under `--modules-dir` takes effect without restarting core. On Linux the directory watch
+notices within about half a second; everywhere, `weavectl reload` (or `kill -HUP` on the
+weave-agent process) does it at once, and the periodic rescan (`--module-rescan`, default 1m,
+`0` disables) catches anything else. `weavectl reload` prints what it did:
+
+```
+added     weave-linux-exec
+replaced  weave-linux-presence
+invalid   weave-linux-broken  manifest: unexpected end of JSON input
+```
+
+`removed` lists modules stopped because their directory went away, and `no module changes`
+ends the output when nothing started, stopped or was replaced. `invalid` rows are every
+module directory core cannot run as things stand, found by this pass or an earlier one; fix
+the directory and reload again.
 
 `WEAVE_STATE_DIR` redirects the entire filesystem layout; without it the platform paths
 apply (`/Library/Application Support/Weave`, `%ProgramData%\Weave`, `/var/lib/weave`).

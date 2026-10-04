@@ -184,12 +184,80 @@ disagree:
 | `ControlService.Modules` | `weavectl modules`, the operator view, which adds pid and detail |
 | `internal/lifecycle` | the install health gate waits on the entry's state and health |
 
+Core's module reload writes it too, for a module directory it cannot run: an `invalid`
+entry with the reason as its detail, and no manifest identity
+([Module reload](#module-reload)).
+
 Watchers are woken on a change a reader would act on: a module added or removed, or any
 of its identity, state, detail, pid, restarts or health status and reason changing. A health
 poll that only refreshes the details map does not wake anyone — the supervisor re-records every
 module on every poll, and a push to every host each time would bury the changes that matter.
 Wake-ups coalesce, and every reader takes a whole snapshot with a `revision` that only
 increases, so a slow reader skips to the latest state rather than replaying a backlog.
+
+## Module reload
+
+Core runs what its modules directory (`--modules-dir`, `/usr/lib/weave/modules` on a
+packaged Linux install) holds, and keeps doing so while it runs: a module package installed,
+upgraded or removed takes effect without restarting core, and without touching any module it
+did not change. One pass (`internal/core/reconcile.go`) does it, and start-up is simply the
+first pass.
+
+A pass lists the directory and, for each module, reads it again and compares it with what
+the supervisor is running:
+
+| On disk | Running | The pass |
+|---|---|---|
+| a module | no | `Add`s it — verified before exec like every launch |
+| a module with another manifest version, another binary (SHA-256, or another path, as a `current` flip gives) or another `config.json` | yes | `Replace`s it: drain the old process, start the new one |
+| the same module | yes | nothing |
+| nothing (directory gone, or the module is built for another host) | yes | `StopModule`: drain, stop, leave the registry |
+| a directory that cannot run | either | stops it if it was running, records it `invalid` |
+
+Anything else in the manifest is ignored, so a rewrite that changes nothing a module runs
+with does not restart it. The supervisor's own replace semantics apply: the gated,
+rolled-back promote is the lifecycle manager's (below), and a package upgrade has no retained
+version to roll back to.
+
+**Invalid is per module.** A manifest that does not parse, no binary, a `current` naming no
+version, a manifest id that does not match its directory, an address another module already
+answers to: that module is logged, recorded in the registry as `invalid` with the reason in
+its detail — so `weavectl modules` and the host's `modules.changed` both show it — and every
+other module carries on. A directory with no manifest at all is not a module yet (a package
+manager between creating it and unpacking into it) and is skipped. **A modules directory
+core cannot read at all is different.** At start-up it stops core: that is a broken install,
+not an empty one, and a core that came up running nothing would look healthy to weaveboot
+and systemd. In a later pass it changes nothing and is logged, because "could not look"
+must not be read as "nothing installed" and stop every module.
+
+**Four triggers, one pass.** All of them end in the same reconcile:
+
+- **the directory watch** — inotify on Linux, on the modules directory and each module
+  directory in it, following directories as they come and go;
+- **SIGHUP** to weave-agent — `systemctl reload weave-agent` (`ExecReload`) signals weaveboot,
+  systemd's main pid, which forwards it to core;
+- **`ControlService.Reload`** — `weavectl reload`, which answers with what the pass did:
+  modules added, removed and replaced, and every module still invalid;
+- **the periodic rescan** — `--module-rescan` / `WEAVE_MODULE_RESCAN`, default one minute,
+  `0` to disable: the safety net for a change nothing reported, and for macOS and Windows,
+  which have no watch yet.
+
+Passes are serialised, and the watch and SIGHUP go through a debounce: a trigger waits for
+half a second of quiet (and never more than five seconds in all), so a package's burst of
+file events is one pass. `weavectl reload` runs a pass at once and waits for its answer.
+
+**Never a half-written binary.** dpkg writes each file as `<name>.dpkg-new` and renames it
+into place, and the rename is atomic; the watch ignores `*.dpkg-*` names, and discovery only
+ever opens the module's own file names. For anything that writes a binary in place, a pass
+hashes the binary between two `stat`s and, if it changed while being read, leaves that
+module alone and looks again after the debounce.
+
+**Reload and install take turns.** The lifecycle manager replaces a module's process before
+it flips `current`, so between the two the running version and the disk disagree. A pass
+compares and acts on each module while holding the lifecycle manager's lock for that id —
+the lock install and rollback hold — so it never sees a promote half done, and an install
+waits for a pass on its module to finish. The lifecycle manager installs into the same
+modules directory core reads, so `--modules-dir` moves both.
 
 ## Sessions
 
@@ -372,7 +440,7 @@ log directories are `/var/lib/weave/run` and `/var/lib/weave/logs`, not the plat
 |---|---|---|---|---|
 | `StateDir` | `/var/lib/weave` | `/Library/Application Support/Weave` | `%ProgramData%\Weave` | `0711` |
 | `RunDir` — sockets | `/run/weave` | `/var/run/weave` | `StateDir\run` | `0711` |
-| `ExecDir` — staged module binaries | `StateDir/exec` | `StateDir/exec` | `StateDir\exec` (unused) | `0711` |
+| `ExecDir` — staged module binaries | `StateDir/exec` | `StateDir/exec` | `StateDir\exec` | `0711` |
 | `LogDir` | `/var/log/weave` | `/Library/Logs/Weave` | `StateDir\logs` | `0700` |
 | `StagingDir`, `ModulesDir`, `core/` | under `StateDir` | under `StateDir` | under `StateDir` | `0700` |
 
@@ -401,7 +469,15 @@ user:
   The control socket in `RunDir` is a `0600` root socket whose peer uid must be root or core.
 - **Windows** holds the same boundaries with ACLs rather than modes: the installer protects
   `StateDir` to SYSTEM and Administrators, a module's image is opened with core's access by
-  `CreateProcessAsUser` (so nothing is staged), and host endpoints are SDDL'd pipes.
+  `CreateProcessAsUser`, and host endpoints are SDDL'd pipes. **Every** module is staged
+  there, whatever it runs as, for a different reason: Windows keeps a running image's file
+  open against deletion, so a module run from where it is installed could not be removed or
+  replaced while it runs — an installer, the lifecycle manager's prune and the module reload
+  would all be refused. Each launch copies the binary into a fresh directory under
+  `ExecDir\<id>\`, inheriting `StateDir`'s ACL, and **verifies the copy**: the Authenticode
+  signature is embedded, so the copy carries it, and checking the file actually exec'd leaves
+  no gap between check and launch. The copy goes when the module stops (retried while
+  Windows lets go of the image) and otherwise at the next launch or start-up sweep.
 
 ## Core's internal layout
 

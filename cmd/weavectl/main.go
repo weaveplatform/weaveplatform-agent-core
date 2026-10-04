@@ -26,6 +26,7 @@ Usage:
   weavectl [-socket PATH] install <module> [version]    install from the channel manifest
   weavectl [-socket PATH] install -local <dir>          install from a local directory (dev)
   weavectl [-socket PATH] rollback <module>             flip to the retained previous version
+  weavectl [-socket PATH] reload                        reread the modules directory and apply changes
 `
 
 func main() {
@@ -170,9 +171,44 @@ func run(argv []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "rolled back to %s\n", resp.GetRolledBackTo())
 
+	case "reload":
+		// A replace drains the old process before starting the new one.
+		rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer rcancel()
+		resp, err := client.Reload(rctx, &controlv1.ReloadRequest{})
+		if err != nil {
+			return fatal("reload: %v", err)
+		}
+		printReload(stdout, resp)
+
 	default:
 		fs.Usage()
 		return 2
 	}
 	return 0
+}
+
+// printReload lists what a reload did, one module per line, and every
+// module directory core still cannot run.
+func printReload(out io.Writer, resp *controlv1.ReloadResponse) {
+	w := tabwriter.NewWriter(out, 2, 4, 2, ' ', 0)
+	for _, row := range []struct {
+		verb string
+		ids  []string
+	}{
+		{"added", resp.GetAdded()},
+		{"removed", resp.GetRemoved()},
+		{"replaced", resp.GetReplaced()},
+	} {
+		for _, id := range row.ids {
+			fmt.Fprintf(w, "%s\t%s\n", row.verb, id)
+		}
+	}
+	for _, m := range resp.GetInvalid() {
+		fmt.Fprintf(w, "invalid\t%s\t%s\n", m.GetId(), m.GetDetail())
+	}
+	w.Flush()
+	if len(resp.GetAdded())+len(resp.GetRemoved())+len(resp.GetReplaced()) == 0 {
+		fmt.Fprintln(out, "no module changes")
+	}
 }

@@ -51,6 +51,11 @@ type Options struct {
 	// Under the SCM there is no stderr to inherit, so the service passes
 	// its log file.
 	Output io.Writer
+	// Forward carries signals to pass on to the running core unchanged —
+	// SIGHUP, so `systemctl reload` reaches core though systemd's main pid
+	// is weaveboot. One that arrives while no core runs is dropped: the next
+	// core reads everything afresh as it starts.
+	Forward <-chan os.Signal
 }
 
 func binaryName() string {
@@ -100,7 +105,7 @@ func Run(ctx context.Context, o Options) error {
 		os.Remove(readyFile)
 		o.Log.Info("starting core", "version", version, "bin", bin)
 		started := time.Now()
-		err = runOnce(ctx, bin, o.AgentArgs, readyFile, o.Output)
+		err = runOnce(ctx, bin, o.AgentArgs, readyFile, o.Output, o.Forward)
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -159,6 +164,7 @@ func runOnce(
 	args []string,
 	readyFile string,
 	out io.Writer,
+	forward <-chan os.Signal,
 ) error {
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
@@ -173,7 +179,25 @@ func runOnce(
 	// harder kill.
 	gracefulStop(cmd)
 	cmd.WaitDelay = 15 * time.Second
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("running core %s: %w", bin, err)
+	}
+	exited := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-exited:
+				return
+			case sig := <-forward:
+				// An error only means core has just exited, which Wait is
+				// about to report.
+				_ = cmd.Process.Signal(sig)
+			}
+		}
+	}()
+	err := cmd.Wait()
+	close(exited)
+	if err != nil {
 		return fmt.Errorf("running core %s: %w", bin, err)
 	}
 	return nil

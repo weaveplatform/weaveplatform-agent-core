@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -256,6 +257,9 @@ func TestLaunchFailures(t *testing.T) {
 	}
 }
 
+// A binary that is not there fails the launch, naming it. Where it fails
+// differs: exec on unix, staging the copy on Windows, which stages every
+// module (stageBinary).
 func TestLaunchExecFailure(t *testing.T) {
 	sup, logs, _ := capturingSupervisor(t)
 	if err := sup.Add(
@@ -263,7 +267,12 @@ func TestLaunchExecFailure(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	waitLog(t, logs, "exec:", 10*time.Second)
+	want := "exec:"
+	if runtime.GOOS == "windows" {
+		want = "staging binary: opening module binary"
+	}
+	waitLog(t, logs, want, 10*time.Second)
+	waitLog(t, logs, "absent"+exeSuffix(), 10*time.Second)
 }
 
 // Core stopping while a launch is still waiting on the handshake ends the
@@ -396,4 +405,40 @@ func TestStableRunResetsCrashCount(t *testing.T) {
 	if st := sup.Statuses()[0]; st.State == StateStartLimited {
 		t.Fatal("stable runs still tripped the start limit")
 	}
+}
+
+// A stopped module's staged copy goes with it; one that cannot be removed is
+// reported and left for SweepOrphans.
+func TestStopModuleRemovesStagedCopy(t *testing.T) {
+	sup, logs, _ := capturingSupervisor(t)
+	spec := Spec{Manifest: testManifest("no.such.capability"), BinPath: "unused"}
+	if err := sup.Add(spec); err != nil {
+		t.Fatal(err)
+	}
+	staged := sup.Layout.ModuleExecDir(spec.Manifest.ID)
+	if err := os.MkdirAll(filepath.Join(staged, "run-1"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sup.StopModule(spec.Manifest.ID)
+	if _, err := os.Stat(staged); !os.IsNotExist(err) {
+		t.Fatalf("staged copy survived the stop: %v", err)
+	}
+
+	oldTries := stagedRemoveTries
+	stagedRemoveTries = 2
+	t.Cleanup(func() { stagedRemoveTries = oldTries })
+	// A NUL makes the path unremovable on every OS.
+	sup.Layout.ExecDir = filepath.Join(sup.Layout.ExecDir, "bad\x00dir")
+	if err := sup.Add(spec); err != nil {
+		t.Fatal(err)
+	}
+	sup.StopModule(spec.Manifest.ID)
+	waitLog(t, logs, "staged binary left behind", 5*time.Second)
+
+	// No layout at all: nothing to remove, and nothing outside it touched.
+	sup.Layout.ExecDir = ""
+	if err := sup.Add(spec); err != nil {
+		t.Fatal(err)
+	}
+	sup.StopModule(spec.Manifest.ID)
 }

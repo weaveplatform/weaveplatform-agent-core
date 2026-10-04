@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -116,13 +117,70 @@ func TestApplyPrivilegeWindows(t *testing.T) {
 }
 
 func TestSystemTargetWindows(t *testing.T) {
-	tgt, err := newTarget(layout.Layout{}, testManifest(), nil)
+	if _, err := (&target{m: testManifest()}).stageBinary(
+		`C:\m.exe`,
+	); !errors.Is(
+		err,
+		errNoExecDir,
+	) {
+		t.Fatalf("stageBinary with no layout = %v", err)
+	}
+	lay := layout.Resolve(t.TempDir())
+	tgt, err := newTarget(lay, testManifest(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer tgt.close()
-	if bin, err := tgt.stageBinary(`C:\m.exe`); err != nil || bin != `C:\m.exe` {
-		t.Fatalf("stageBinary = %q %v", bin, err)
+	installed := filepath.Join(t.TempDir(), "m.exe")
+	if err := os.WriteFile(installed, []byte("image"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Staged under the module's ExecDir, in a fresh directory per launch,
+	// and never the installed file itself.
+	first, err := tgt.stageBinary(installed)
+	if err != nil {
+		t.Fatalf("stageBinary: %v", err)
+	}
+	if filepath.Dir(filepath.Dir(first)) != lay.ModuleExecDir(testManifest().ID) {
+		t.Fatalf("staged at %s", first)
+	}
+	if b, err := os.ReadFile(first); err != nil || string(b) != "image" {
+		t.Fatalf("staged copy = %q %v", b, err)
+	}
+	// A copy that is still open (as a running image is) does not stop the
+	// next launch; one that is not is cleared by it.
+	held, err := os.Open(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := tgt.stageBinary(installed)
+	held.Close()
+	if err != nil || second == first {
+		t.Fatalf("restage over a held copy = %q %v", second, err)
+	}
+	if _, err := tgt.stageBinary(installed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(first); !os.IsNotExist(err) {
+		t.Fatalf("stale staged copy kept: %v", err)
+	}
+	// The installed file is free to go while a copy is staged.
+	if err := os.Remove(installed); err != nil {
+		t.Fatalf("installed binary locked by staging: %v", err)
+	}
+	if _, err := tgt.stageBinary(installed); err == nil {
+		t.Fatal("staged a binary that is not there")
+	}
+	// ExecDir unusable: a file where the module's directory belongs.
+	blocked := layout.Resolve(t.TempDir())
+	if err := os.MkdirAll(blocked.ExecDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(blocked.ModuleExecDir(testManifest().ID), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&target{layout: blocked, m: testManifest()}).stageBinary(first); err == nil {
+		t.Fatal("staged into a file")
 	}
 	if err := tgt.prepareSocketDir("", ""); err != nil {
 		t.Fatal(err)

@@ -49,6 +49,10 @@ type Spec struct {
 	BinPath  string
 	// Config is delivered opaquely in InitRequest.
 	Config []byte
+	// Digest is the binary's "sha256:<hex>" when the spec was built. Add
+	// fills it in when empty, so whatever compares a running module with the
+	// disk (core's module reload) can tell a binary replaced in place.
+	Digest string
 }
 
 // Supervisor runs a set of modules. Configure the exported fields before
@@ -229,6 +233,11 @@ func (s *Supervisor) capabilityList() []*agentv1.Capability {
 // already registered is refused — callers hot-swap via Replace, which stops the
 // incumbent first.
 func (s *Supervisor) Add(spec Spec) error {
+	if spec.Digest == "" {
+		// Unreadable is not fatal here: launch reports it, with the rest of
+		// what verify-before-exec finds.
+		spec.Digest, _ = FileDigest(spec.BinPath)
+	}
 	s.mu.Lock()
 	if s.baseCtx == nil {
 		s.mu.Unlock()
@@ -306,6 +315,14 @@ func (s *Supervisor) StopModule(id string) {
 	// After the runner has finished, not before: its last state change
 	// would otherwise put the entry straight back.
 	r.reg.Remove(id)
+	// The staged copy goes with the process, so a module removed from disk
+	// leaves nothing runnable behind.
+	if s.Layout.ExecDir == "" {
+		return
+	}
+	if err := removeStaged(s.Layout.ModuleExecDir(id)); err != nil {
+		r.log.Warn("staged binary left behind; swept at next start", "err", err)
+	}
 }
 
 // Replace hot-swaps a module: the old process drains and stops, then the
@@ -328,6 +345,17 @@ func (s *Supervisor) SweepOrphans() {
 			os.RemoveAll(filepath.Join(dir, e.Name()))
 		}
 	}
+}
+
+// Specs returns the spec of every module the supervisor holds, by id.
+func (s *Supervisor) Specs() map[string]Spec {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]Spec, len(s.runners))
+	for id, r := range s.runners {
+		out[id] = r.spec
+	}
+	return out
 }
 
 // Statuses snapshots every registered module, sorted by id.

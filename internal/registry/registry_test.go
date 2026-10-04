@@ -34,8 +34,13 @@ func TestLookups(t *testing.T) {
 	if _, ok := r.ByAddress("nowhere"); ok {
 		t.Fatal("ByAddress found an address nobody answers to")
 	}
+	r.Set(Module{ID: "c", State: StateInvalid, Detail: "no binary"})
+	if m, ok := r.ByAddress(""); ok {
+		t.Fatalf("an empty address found %+v", m)
+	}
+	r.Remove("c")
 	rev, mods := r.List()
-	if rev != 2 || len(mods) != 2 || mods[0].ID != "a" || mods[1].ID != "b" {
+	if rev != 4 || len(mods) != 2 || mods[0].ID != "a" || mods[1].ID != "b" {
 		t.Fatalf("List = %d %+v", rev, mods)
 	}
 }
