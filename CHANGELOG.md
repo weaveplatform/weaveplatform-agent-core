@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.2](https://github.com/weaveplatform/weaveplatform-agent-core/compare/v0.9.1...v0.9.2) (2026-10-04)
+
+
+### Features
+
+* module registry for core, hosts and modules ([c9f4fff](https://github.com/weaveplatform/weaveplatform-agent-core/commit/c9f4fff9c711c187e1428b2e7868ad3185449d17))
+* module registry for core, hosts and modules ([53c0778](https://github.com/weaveplatform/weaveplatform-agent-core/commit/53c0778ff7090a5c43b3df62aae9efff30ae8050))
+
 ## [0.9.1](https://github.com/weaveplatform/weaveplatform-agent-core/compare/v0.9.0...v0.9.1) (2026-10-04)
 
 
