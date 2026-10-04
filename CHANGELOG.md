@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.9.1](https://github.com/weaveplatform/weaveplatform-agent-core/compare/v0.9.0...v0.9.1) (2026-10-04)
+
+
+### Bug Fixes
+
+* **packaging:** create the weave-agent service account ([6893bda](https://github.com/weaveplatform/weaveplatform-agent-core/commit/6893bdabef36825a416204339d59d42fdfc8e238))
+* service modules start on a stock Linux install ([455a5f5](https://github.com/weaveplatform/weaveplatform-agent-core/commit/455a5f546cdf1dd430300f9288b1d6e54cdd042c))
+* stage module binaries where a service module can run them ([706aaa8](https://github.com/weaveplatform/weaveplatform-agent-core/commit/706aaa8ff761c8578d12a365cdf627cce3e2f59d))
+
 ## [0.9.0](https://github.com/weaveplatform/weaveplatform-agent-core-next/compare/v0.8.1...v0.9.0) (2026-10-03)
 
 
