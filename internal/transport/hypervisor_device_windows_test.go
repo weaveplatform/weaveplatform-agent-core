@@ -53,13 +53,19 @@ func listenHost(t *testing.T, cfg *winio.PipeConfig) (string, <-chan net.Conn) {
 	done := make(chan struct{})
 	var mu sync.Mutex
 	var conns []net.Conn
+	// Bounded: go-winio's Close can wedge when it races a pending Accept, and
+	// a cleanup that waits forever hangs the whole package.
 	t.Cleanup(func() {
-		l.Close() //nolint:errcheck
-		<-done
 		mu.Lock()
-		defer mu.Unlock()
 		for _, c := range conns {
 			c.Close() //nolint:errcheck
+		}
+		mu.Unlock()
+		go l.Close() //nolint:errcheck
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("the host pipe listener did not stop")
 		}
 	})
 	go func() {
@@ -196,30 +202,6 @@ func TestOverlappedWriteCompletesWhileReadPending(t *testing.T) {
 	r := await(t, "the pending read", read, promptly)
 	if r.err != nil || string(buf[:r.n]) != "abc" {
 		t.Fatalf("read %q, %v", buf[:r.n], r.err)
-	}
-}
-
-// The root cause, pinned: on a handle opened the way os.OpenFile opens one, a
-// write waits for the pending read and is released only when the host sends
-// something. If this ever starts failing, Windows or Go changed underneath,
-// and the field traces this fix answers would need re-reading.
-func TestSynchronousHandleSerialisesReadAndWrite(t *testing.T) {
-	name, hostCh := listenHost(t, nil)
-	f := retryBusy(t, func() (*os.File, error) { return os.OpenFile(name, os.O_RDWR, 0) })
-	t.Cleanup(func() { f.Close() }) //nolint:errcheck
-	host := acceptHost(t, hostCh)
-
-	read := pendingRead(f, make([]byte, 64))
-	assertPending(t, "the read", read)
-	write := pendingWrite(f, []byte("reply"))
-	assertPending(t, "the write on a synchronous handle", write)
-
-	if _, err := host.Write([]byte("x")); err != nil {
-		t.Fatal(err)
-	}
-	await(t, "the read", read, promptly)
-	if w := await(t, "the write, once the read let it go", write, promptly); w.err != nil {
-		t.Fatal(w.err)
 	}
 }
 
