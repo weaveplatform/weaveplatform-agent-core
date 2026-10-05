@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -10,7 +11,6 @@ import (
 	"sync"
 	"syscall"
 	"unicode/utf16"
-	"unsafe"
 
 	"github.com/deploymenttheory/go-bindings-win32/bindings/win32/foundation"
 	"github.com/deploymenttheory/go-bindings-win32/bindings/win32/storage/filesystem"
@@ -153,29 +153,32 @@ func watchOnce(ctx context.Context, dir string, notify func()) error {
 // staged temporary would otherwise also arrive as a change to the module
 // directory holding it. The entries' own events say everything that matters.
 func changedNames(root string, buf []byte) bool {
-	const header = int(unsafe.Offsetof(filesystem.FILE_NOTIFY_INFORMATION{}.FileName))
+	// Read field by field rather than cast to FILE_NOTIFY_INFORMATION: the
+	// struct's Go size rounds up past a short last record, and a cast would
+	// then reach beyond what the kernel wrote.
+	const header = 12 // NextEntryOffset, Action, FileNameLength
 	changed := false
 	for off := 0; off+header <= len(buf); {
-		info := (*filesystem.FILE_NOTIFY_INFORMATION)(
-			unsafe.Pointer(&buf[off]),
-		) //nolint:gosec // the kernel's record layout
-		end := off + header + int(info.FileNameLength)
-		if end > len(buf) {
+		next := binary.LittleEndian.Uint32(buf[off:])
+		action := filesystem.FILE_ACTION(binary.LittleEndian.Uint32(buf[off+4:]))
+		size := int(binary.LittleEndian.Uint32(buf[off+8:]))
+		end := off + header + size
+		if end > len(buf) || end < off {
 			break
 		}
-		name := make([]uint16, info.FileNameLength/2)
+		name := make([]uint16, size/2)
 		for i := range name {
-			name[i] = uint16(buf[off+header+2*i]) | uint16(buf[off+header+2*i+1])<<8
+			name[i] = binary.LittleEndian.Uint16(buf[off+header+2*i:])
 		}
 		rel := string(utf16.Decode(name))
-		if !ignoredPath(rel) &&
-			(info.Action != filesystem.FILE_ACTION_MODIFIED || !isDir(filepath.Join(root, rel))) {
+		dirTouched := action == filesystem.FILE_ACTION_MODIFIED && isDir(filepath.Join(root, rel))
+		if !ignoredPath(rel) && !dirTouched {
 			changed = true
 		}
-		if info.NextEntryOffset == 0 {
+		if next == 0 {
 			break
 		}
-		off += int(info.NextEntryOffset)
+		off += int(next)
 	}
 	return changed
 }

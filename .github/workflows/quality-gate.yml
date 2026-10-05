@@ -163,6 +163,9 @@ jobs:
       - name: shellcheck the macOS and Windows packaging scripts
         run: make shellcheck
 
+      - name: The Windows install scripts parse as PowerShell
+        run: make ps-check
+
       # The release's Authenticode signing, with a throwaway certificate:
       # sign, timestamp, verify and the refusals (packaging/windows/sign.sh).
       - name: Windows signing script

@@ -86,7 +86,7 @@ if (-not $NoTrustCert) {
     } elseif ($PSBoundParameters.ContainsKey('TrustCert')) {
         Stop-WithFailure "code-signing certificate $TrustCert not found"
     } else {
-        Write-Log "no $TrustCert: trusting no code-signing certificate"
+        Write-Log "no ${TrustCert}: trusting no code-signing certificate"
     }
 }
 foreach ($kv in ($Environment -split ';' | Where-Object { $_ })) {

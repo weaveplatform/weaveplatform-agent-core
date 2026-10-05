@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -271,7 +272,11 @@ func TestUninstallFailures(t *testing.T) {
 		t.Fatalf("unremovable file: %v", err)
 	}
 
-	// A modules path that is a file cannot be read as a directory.
+	// A modules path that is a file cannot be read as a directory. (Windows
+	// reports that as the path not existing, which is nothing to remove.)
+	if runtime.GOOS == "windows" {
+		return
+	}
 	u = installed(t)
 	u.u.RemoveFiles = true
 	modules := filepath.Join(u.u.InstallDir, ModulesDirName)

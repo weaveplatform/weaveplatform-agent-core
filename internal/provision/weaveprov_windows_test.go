@@ -33,6 +33,14 @@ func daclSDDL(t *testing.T, path string) string {
 	return win32.UTF16ToString(str)
 }
 
+// anchorDACL is the file's DACL as SDDL, less the AI (auto-inherited) flag
+// Windows adds when it applies a protected DACL: the ACEs and the protection
+// are what is being checked.
+func anchorDACL(t *testing.T, path string) string {
+	t.Helper()
+	return strings.Replace(daclSDDL(t, path), "D:PAI(", "D:P(", 1)
+}
+
 // The anchor as installed on NTFS: the hard link publishes the staged file,
 // which carries the protected ACL it was given before the link; a second
 // install finds the link taken and replaces nothing; no staged file is left.
@@ -47,7 +55,7 @@ func TestInstallOnNTFS(t *testing.T) {
 	if got, err := os.ReadFile(path); err != nil || string(got) != b64+"\n" {
 		t.Fatalf("anchor = %q, %v", got, err)
 	}
-	if got := daclSDDL(t, path); got != anchorSDDL {
+	if got := anchorDACL(t, path); got != anchorSDDL {
 		t.Fatalf("anchor DACL %s, want %s", got, anchorSDDL)
 	}
 	other, _ := newKey(t)
@@ -105,7 +113,14 @@ func TestRealProvisioningVolume(t *testing.T) {
 			"set WEAVE_TEST_WEAVEPROV=1 on an elevated Windows host to attach a real WEAVEPROV disk",
 		)
 	}
-	vhd := filepath.Join(t.TempDir(), "weaveprov.vhdx")
+	// The long form of the path: the virtual disk service matches a disk by
+	// the path it was attached under, and the runner's temporary directory is
+	// an 8.3 short name (RUNNER~1) that a later session would not match.
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	vhd := filepath.Join(tmp, "weaveprov.vhdx")
 	letter := freeLetter(t)
 	if err := diskpart(t,
 		fmt.Sprintf(`create vdisk file="%s" maximum=32 type=expandable`, vhd),
@@ -160,7 +175,7 @@ func TestRealProvisioningVolume(t *testing.T) {
 	if got, err := os.ReadFile(anchor); err != nil || string(got) != b64+"\n" {
 		t.Fatalf("anchor %q, %v; want the volume's key %x", got, err, key)
 	}
-	if got := daclSDDL(t, anchor); got != anchorSDDL {
+	if got := anchorDACL(t, anchor); got != anchorSDDL {
 		t.Fatalf("anchor DACL %s, want %s", got, anchorSDDL)
 	}
 	if out, _ := p.Once(); out != AnchorPresent {

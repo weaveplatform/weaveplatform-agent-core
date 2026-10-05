@@ -107,11 +107,13 @@ func withStore(loc Location, name string, fn func(crypt.HCERTSTORE) error) error
 	if loc == CurrentUser {
 		flags = crypt.CERT_SYSTEM_STORE_CURRENT_USER
 	}
-	// CERT_STORE_PROV_SYSTEM_W is a provider number passed where a string
-	// pointer goes, as wincrypt.h's macros do.
-	provider := foundation.PSTR((*byte)(unsafe.Add(nil, crypt.CERT_STORE_PROV_SYSTEM_W)))
+	// The system store provider by name (sz_CERT_STORE_PROV_SYSTEM_W, whose
+	// pvPara is a UTF-16 store name) rather than by its number: wincrypt.h
+	// passes CERT_STORE_PROV_SYSTEM_W as the integer 10 cast to a pointer,
+	// which Go's checkptr rightly refuses as a pointer value.
+	provider := append([]byte(crypt.Sz_CERT_STORE_PROV_SYSTEM_W), 0)
 	s, err := crypt.CertOpenStore(
-		provider, 0,
+		foundation.PSTR(&provider[0]), 0,
 		crypt.CERT_OPEN_STORE_FLAGS(flags)|crypt.CERT_STORE_OPEN_EXISTING_FLAG,
 		unsafe.Pointer(win32.UTF16Ptr(name)),
 	)
