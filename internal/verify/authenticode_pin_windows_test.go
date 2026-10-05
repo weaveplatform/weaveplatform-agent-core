@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
+	"errors"
 	"math/big"
 	"os"
 	"strings"
@@ -53,36 +54,52 @@ func mintCert(t *testing.T, cn string) (*crypt.CERT_CONTEXT, string) {
 	return ctx, strings.ToUpper(hex.EncodeToString(sum[:]))
 }
 
-func TestMatchPinPrefersTheThumbprint(t *testing.T) {
+// Each way a manifest can pin the signer: thumbprint only, subject only,
+// both (both must hold), and neither (refused before any verification).
+func TestMatchPin(t *testing.T) {
 	cert, thumb := mintCert(t, "WeaveTest")
 	if got, err := certThumbprint(cert); err != nil || got != thumb {
 		t.Fatalf("certThumbprint = %q, %v; want %q", got, err, thumb)
 	}
-	// The thumbprint decides even when the subject would not match, and is
-	// compared case-insensitively since tools print it either way.
-	if err := matchPin("x.exe", cert, testMod("SomeoneElse", strings.ToLower(thumb))); err != nil {
-		t.Fatalf("matching thumbprint refused: %v", err)
+	other := strings.Repeat("00", 20)
+	for name, tc := range map[string]struct {
+		subject, thumbprint string
+		want                error
+	}{
+		// Compared case-insensitively: tools print thumbprints either way.
+		"thumbprint only":        {"", strings.ToLower(thumb), nil},
+		"thumbprint only, wrong": {"", other, errThumbprintMismatch},
+		"subject only":           {"WeaveTest", "", nil},
+		"subject only, a prefix": {"WeaveTes", "", errSubjectMismatch},
+		"both":                   {"WeaveTest", thumb, nil},
+		"both, subject wrong":    {"SomeoneElse", thumb, errSubjectMismatch},
+		"both, thumbprint wrong": {"WeaveTest", other, errThumbprintMismatch},
+		"both wrong":             {"SomeoneElse", other, errThumbprintMismatch},
+	} {
+		err := matchPin("x.exe", cert, testMod(tc.subject, tc.thumbprint))
+		if tc.want == nil && err != nil || tc.want != nil && !errors.Is(err, tc.want) {
+			t.Errorf("%s: %v, want %v", name, err, tc.want)
+		}
 	}
-	err := matchPin("x.exe", cert, testMod("WeaveTest", strings.Repeat("00", 20)))
-	if err == nil || !strings.Contains(err.Error(), "thumbprint") {
-		t.Fatalf("wrong thumbprint: %v", err)
-	}
-}
-
-func TestMatchPinFallsBackToTheSubject(t *testing.T) {
-	cert, _ := mintCert(t, "WeaveTest")
-	if err := matchPin("x.exe", cert, testMod("WeaveTest", "")); err != nil {
-		t.Fatalf("matching subject refused: %v", err)
-	}
-	if err := matchPin("x.exe", cert, testMod("WeaveTes", "")); err == nil {
-		t.Fatal("a subject prefix was accepted")
+	for name, s := range map[string]*manifest.Signing{"no signing": nil, "empty signing": {}} {
+		m := testMod("", "")
+		m.Signing = s
+		if err := authenticodeVerify(
+			`C:\Windows\System32\notepad.exe`,
+			m,
+		); !errors.Is(
+			err,
+			errNoPin,
+		) {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }
 
 func TestMatchPinRefusesACertificateWithoutASubject(t *testing.T) {
 	cert, _ := mintCert(t, "")
-	err := matchPin("x.exe", cert, testMod("", ""))
-	if err == nil || !strings.Contains(err.Error(), "no subject name") {
+	err := matchPin("x.exe", cert, testMod("Someone", ""))
+	if !errors.Is(err, errNoSubjectName) {
 		t.Fatalf("subjectless certificate: %v", err)
 	}
 }
@@ -126,8 +143,7 @@ func TestAuthenticodeTrustedChainStillNeedsThePin(t *testing.T) {
 
 func TestWindowsNewVerifierIsAuthenticode(t *testing.T) {
 	m := &manifest.Manifest{ID: "x"}
-	if err := newVerifier(nil).Verify(`C:\nowhere.exe`, m); err == nil ||
-		!strings.Contains(err.Error(), "authenticode_subject") {
+	if err := newVerifier(nil).Verify(`C:\nowhere.exe`, m); !errors.Is(err, errNoPin) {
 		t.Fatalf("newVerifier = %v", err)
 	}
 }

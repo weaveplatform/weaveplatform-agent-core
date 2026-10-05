@@ -20,7 +20,12 @@ const (
 
 func channelSchema(t *testing.T) *jsonschema.Schema {
 	t.Helper()
-	raw, err := os.ReadFile("channel-manifest.schema.json")
+	return compile(t, "channel-manifest.schema.json")
+}
+
+func compile(t *testing.T, file string) *jsonschema.Schema {
+	t.Helper()
+	raw, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,10 +35,10 @@ func channelSchema(t *testing.T) *jsonschema.Schema {
 	}
 	c := jsonschema.NewCompiler()
 	c.AssertFormat()
-	if err := c.AddResource("channel.json", doc); err != nil {
+	if err := c.AddResource(file, doc); err != nil {
 		t.Fatal(err)
 	}
-	s, err := c.Compile("channel.json")
+	s, err := c.Compile(file)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,6 +72,17 @@ var valid = map[string]string{
 		"signature":{"provider":"cosign-key","key_id":"hint"},"build_date":"2026-10-02T08:00:00Z"}]}`,
 }
 
+// A Windows module's distribution entry, signing pinned as the
+// weave-windows-* manifests pin it and weaveplatform-release-channels copies
+// it into the channel.
+const thumb = "A6A3936288B9409ED7A3458CF81014A77AB59B51"
+
+func init() {
+	valid["windows module promotion"] = strings.Replace(valid["module promotion"],
+		`"subscribes":["inventory"],`,
+		`"subscribes":["inventory"],"signing":{"authenticode_subject":"weaveplatform code signing","authenticode_thumbprint":"`+thumb+`"},`, 1)
+}
+
 func TestChannelSchemaAcceptsProducedDocuments(t *testing.T) {
 	s := channelSchema(t)
 	for name, doc := range valid {
@@ -88,6 +104,7 @@ func TestChannelSchemaRejects(t *testing.T) {
 		"unknown image field":     strings.Replace(base, `"tag":"24.04-20260915-r1"`, `"tag":"24.04-20260915-r1","ecid":"x"`, 1),
 		"negative sequence":       strings.Replace(base, `"sequence":1`, `"sequence":-1`, 1),
 		"bad expiry":              strings.Replace(base, `"sequence":1`, `"sequence":1,"expires":"soon"`, 1),
+		"short thumbprint":        strings.Replace(valid["windows module promotion"], thumb, thumb[:39], 1),
 		"module without artifacts": strings.Replace(valid["module promotion"],
 			`"artifacts":[{"os":"linux"`, `"artifacts":[],"x":[{"os":"linux"`, 1),
 	} {
@@ -96,5 +113,38 @@ func TestChannelSchemaRejects(t *testing.T) {
 				t.Fatal("accepted")
 			}
 		})
+	}
+}
+
+// A module manifest as agent-modules writes one for Windows (the
+// weave-windows-presence manifest), and the ways its signing pin can be
+// malformed.
+const windowsModule = `{"schema":1,"id":"weave-windows-presence","version":"0.2.0","protocol":1,"zone":"A",
+	"privilege":"service","session":"system",
+	"platforms":[{"os":"windows","arch":"amd64"},{"os":"windows","arch":"arm64"}],
+	"capabilities":["hypervisor.channel"],"address":"weave.presence",
+	"signing":{"authenticode_subject":"weaveplatform code signing","authenticode_thumbprint":"` + thumb + `"}}`
+
+func TestModuleSchemaSigning(t *testing.T) {
+	s := compile(t, "module-manifest.schema.json")
+	for name, doc := range map[string]string{
+		"both":            windowsModule,
+		"thumbprint only": strings.Replace(windowsModule, `"authenticode_subject":"weaveplatform code signing",`, "", 1),
+		"lower case":      strings.Replace(windowsModule, thumb, strings.ToLower(thumb), 1),
+	} {
+		if err := validate(t, s, doc); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	for name, doc := range map[string]string{
+		"39 digits":     strings.Replace(windowsModule, thumb, thumb[:39], 1),
+		"41 digits":     strings.Replace(windowsModule, thumb, thumb+"0", 1),
+		"not hex":       strings.Replace(windowsModule, thumb, "Z"+thumb[1:], 1),
+		"colons":        strings.Replace(windowsModule, thumb, "A6:"+thumb[2:], 1),
+		"unknown field": strings.Replace(windowsModule, `"signing":{`, `"signing":{"authenticode_issuer":"x",`, 1),
+	} {
+		if err := validate(t, s, doc); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
 	}
 }
