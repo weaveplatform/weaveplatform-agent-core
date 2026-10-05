@@ -116,9 +116,8 @@ func TestWatchModuleDirectory(t *testing.T) {
 // The modules directory itself removed and recreated: the watch says so and
 // picks the new directory up.
 func TestWatchModulesDirReplaced(t *testing.T) {
-	old := watchRetry
-	watchRetry = 20 * time.Millisecond
-	t.Cleanup(func() { watchRetry = old })
+	old := watchRetry.Swap(int64(20 * time.Millisecond))
+	t.Cleanup(func() { watchRetry.Store(old) })
 	dir := filepath.Join(t.TempDir(), "modules")
 	// Absent at start: the watch keeps trying.
 	c := &counter{}
