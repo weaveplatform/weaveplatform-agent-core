@@ -63,10 +63,10 @@ identity() {
 
 import_p12() { # import_p12 VAR PASSWORD_VAR: the base64 .p12 in $VAR
 	b64=$(printenv "$1" || true)
-	pw=$(printenv "$2" || true)
+	p12pw=$(printenv "$2" || true)
 	f=$dir/$1.p12
 	printf '%s' "$b64" | base64 --decode >"$f" || die "$1 is not base64"
-	security import "$f" -k "$kc" -f pkcs12 -P "$pw" \
+	security import "$f" -k "$kc" -f pkcs12 -P "$p12pw" \
 		-T /usr/bin/codesign -T /usr/bin/pkgbuild -T /usr/bin/productbuild -T /usr/bin/productsign >/dev/null ||
 		{ rm -f "$f"; die "could not import $1"; }
 	rm -f "$f"
@@ -78,12 +78,12 @@ cmd_keychain() {
 	umask 077
 	mkdir -p "$dir"
 	[ ! -e "$kc" ] || die "a signing keychain already exists at $kc (run: sign.sh cleanup)"
-	pw=$(openssl rand -hex 32)
-	if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::add-mask::$pw"; fi
-	security create-keychain -p "$pw" "$kc"
+	kcpw=$(openssl rand -hex 32)
+	if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::add-mask::$kcpw"; fi
+	security create-keychain -p "$kcpw" "$kc"
 	# Unlocked for six hours, and never by sleep, for the length of a job.
 	security set-keychain-settings -t 21600 "$kc"
-	security unlock-keychain -p "$pw" "$kc"
+	security unlock-keychain -p "$kcpw" "$kc"
 	[ -n "${APPLE_DEVELOPER_ID_APP_P12:-}${APPLE_DEVELOPER_ID_INSTALLER_P12:-}" ] ||
 		die "neither APPLE_DEVELOPER_ID_APP_P12 nor APPLE_DEVELOPER_ID_INSTALLER_P12 is set"
 	if [ -n "${APPLE_DEVELOPER_ID_APP_P12:-}" ]; then
@@ -93,7 +93,7 @@ cmd_keychain() {
 		import_p12 APPLE_DEVELOPER_ID_INSTALLER_P12 APPLE_DEVELOPER_ID_INSTALLER_P12_PASSWORD
 	fi
 	# Lets codesign and the installer tools use the keys without a prompt.
-	security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$pw" "$kc" >/dev/null
+	security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kcpw" "$kc" >/dev/null
 	# On the search list, ahead of the user's own, for pkgbuild and stapler.
 	# shellcheck disable=SC2046 # the existing list is one path per word
 	security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
