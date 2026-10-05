@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.9.9](https://github.com/weaveplatform/weaveplatform-agent-core/compare/v0.9.8...v0.9.9) (2026-10-05)
+
+
+### Features
+
+* sign core's Windows binaries and scripts with Authenticode ([233031e](https://github.com/weaveplatform/weaveplatform-agent-core/commit/233031e8ca6ffa16c67a72817e024f69340fb087))
+* trust the module code-signing certificate when installing on Windows ([7bad8a4](https://github.com/weaveplatform/weaveplatform-agent-core/commit/7bad8a462ad3f935d2c942c8fe0fd96b2c673d6a))
+* watch the modules directory on Windows ([809de6e](https://github.com/weaveplatform/weaveplatform-agent-core/commit/809de6eba4115fa574c99d69424fed075bf9c1cc))
+* Windows guests: signed install, module trust and hot reload ([b4f37c4](https://github.com/weaveplatform/weaveplatform-agent-core/commit/b4f37c46b4b3a1b62820e381a0a4edcdb5762793))
+
+
+### Bug Fixes
+
+* accept an Authenticode thumbprint pin without a subject ([c586b5c](https://github.com/weaveplatform/weaveplatform-agent-core/commit/c586b5c42fadf79c0c52d98f0ee9382361ff494f))
+* drop the Windows signing credentials checklist ([8d01bc3](https://github.com/weaveplatform/weaveplatform-agent-core/commit/8d01bc37c423d73fc1c006958dfd9c0dad44dc2c))
+* fail rather than skip the elevated Windows tests in CI ([50b4a11](https://github.com/weaveplatform/weaveplatform-agent-core/commit/50b4a11a040392230d731efcad68b98694f3c378))
+* Windows store, watch and install-script faults found on the runner ([1219572](https://github.com/weaveplatform/weaveplatform-agent-core/commit/121957205c21a94a4381d85f315e509dd2f46e0d))
+
 ## [0.9.8](https://github.com/weaveplatform/weaveplatform-agent-core/compare/v0.9.7...v0.9.8) (2026-10-05)
 
 
