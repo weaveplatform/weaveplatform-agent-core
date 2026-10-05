@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -39,7 +41,7 @@ func pipeName(t *testing.T) string {
 }
 
 // listenHost listens on a fresh pipe and returns its name and a channel that
-// yields the host end once the guest has opened it.
+// yields each host end as the guest opens it.
 func listenHost(t *testing.T, cfg *winio.PipeConfig) (string, <-chan net.Conn) {
 	t.Helper()
 	name := pipeName(t)
@@ -47,18 +49,55 @@ func listenHost(t *testing.T, cfg *winio.PipeConfig) (string, <-chan net.Conn) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { l.Close() }) //nolint:errcheck
-	host := make(chan net.Conn, 1)
-	go func() {
-		c, err := l.Accept()
-		if err != nil {
-			close(host)
-			return
+	host := make(chan net.Conn, 4)
+	done := make(chan struct{})
+	var mu sync.Mutex
+	var conns []net.Conn
+	t.Cleanup(func() {
+		l.Close() //nolint:errcheck
+		<-done
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			c.Close() //nolint:errcheck
 		}
-		t.Cleanup(func() { c.Close() }) //nolint:errcheck
-		host <- c
+	})
+	go func() {
+		defer close(done)
+		defer close(host)
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, c)
+			mu.Unlock()
+			select {
+			case host <- c:
+			default: // nobody is waiting for it; cleanup closes it
+			}
+		}
 	}()
 	return name, host
+}
+
+// retryBusy retries open while the pipe has no listening instance yet: go-winio
+// only creates one once its accept loop is running, and until then an open
+// fails with ERROR_PIPE_BUSY, which a real port never returns.
+func retryBusy[T any](t *testing.T, open func() (T, error)) T {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		v, err := open()
+		if err == nil {
+			return v
+		}
+		if !errors.Is(err, syscall.Errno(foundation.ERROR_PIPE_BUSY)) || time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func acceptHost(t *testing.T, host <-chan net.Conn) net.Conn {
@@ -79,10 +118,7 @@ func acceptHost(t *testing.T, host <-chan net.Conn) net.Conn {
 func devicePair(t *testing.T, cfg *winio.PipeConfig) (*overlappedDevice, net.Conn) {
 	t.Helper()
 	name, host := listenHost(t, cfg)
-	dev, err := openOverlapped(name)
-	if err != nil {
-		t.Fatal(err)
-	}
+	dev := retryBusy(t, func() (*overlappedDevice, error) { return openOverlapped(name) })
 	t.Cleanup(func() { dev.Close() }) //nolint:errcheck
 	return dev, acceptHost(t, host)
 }
@@ -169,10 +205,7 @@ func TestOverlappedWriteCompletesWhileReadPending(t *testing.T) {
 // and the field traces this fix answers would need re-reading.
 func TestSynchronousHandleSerialisesReadAndWrite(t *testing.T) {
 	name, hostCh := listenHost(t, nil)
-	f, err := os.OpenFile(name, os.O_RDWR, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	f := retryBusy(t, func() (*os.File, error) { return os.OpenFile(name, os.O_RDWR, 0) })
 	t.Cleanup(func() { f.Close() }) //nolint:errcheck
 	host := acceptHost(t, hostCh)
 
@@ -292,6 +325,10 @@ func TestOverlappedEventFailures(t *testing.T) {
 // more, and the guest's answer must still arrive.
 func TestHelloIsAnsweredOverAnOverlappedDevice(t *testing.T) {
 	name, hostCh := listenHost(t, nil)
+	// openDevice falls through to the stock candidates, and its error does
+	// not carry the pipe's, so wait for the pipe to listen first.
+	retryBusy(t, func() (*overlappedDevice, error) { return openOverlapped(name) }).Close() //nolint:errcheck
+	acceptHost(t, hostCh)
 	rwc, err := openDevice(map[string]string{"device": name})
 	if err != nil {
 		t.Fatal(err)
