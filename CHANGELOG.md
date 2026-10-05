@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.9.6](https://github.com/weaveplatform/weaveplatform-agent-core/compare/v0.9.5...v0.9.6) (2026-10-05)
+
+
+### Features
+
+* **packaging:** sign and notarise the macOS package and binaries ([2707ea7](https://github.com/weaveplatform/weaveplatform-agent-core/commit/2707ea781000210f9231be9414658658861adaed))
+* **packaging:** sign and notarise the macOS package and binaries ([063b6bc](https://github.com/weaveplatform/weaveplatform-agent-core/commit/063b6bcf3e4293554a4f260f5d63c57cd0571c26))
+
+
+### Bug Fixes
+
+* **packaging:** keep the keychain password apart from the p12 password ([67fd01f](https://github.com/weaveplatform/weaveplatform-agent-core/commit/67fd01f3230066b711ea50d0e95cace60014fdfa))
+* **verify:** mark the codesign display call for gosec's taint check ([0adb0fb](https://github.com/weaveplatform/weaveplatform-agent-core/commit/0adb0fbd5be4441228f559b3d4838389a67db943))
+
 ## [0.9.5](https://github.com/weaveplatform/weaveplatform-agent-core/compare/v0.9.4...v0.9.5) (2026-10-04)
 
 
