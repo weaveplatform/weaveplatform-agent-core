@@ -117,6 +117,17 @@ func retryBusy[T any](t *testing.T, open func() (T, error)) T {
 	}
 }
 
+// waitListening returns once the stand-in has accepted a connection, so a
+// later open does not find it busy. The probe stays open until it has been
+// accepted: one closed before the server's connect completes is dropped by
+// go-winio and never accepted.
+func waitListening(t *testing.T, name string, hostCh <-chan net.Conn) {
+	t.Helper()
+	probe := retryBusy(t, func() (*overlappedDevice, error) { return openOverlapped(name) })
+	acceptHost(t, hostCh).Close() //nolint:errcheck
+	probe.Close()                 //nolint:errcheck
+}
+
 func acceptHost(t *testing.T, host <-chan net.Conn) net.Conn {
 	t.Helper()
 	select {
@@ -523,8 +534,7 @@ func TestChannelRecoversFromHostThatStopsReading(t *testing.T) {
 	reopenDelay = 10 * time.Millisecond
 
 	name, hostCh := listenHost(t, &winio.PipeConfig{InputBufferSize: 512, OutputBufferSize: 512})
-	retryBusy(t, func() (*overlappedDevice, error) { return openOverlapped(name) }).Close() //nolint:errcheck
-	acceptHost(t, hostCh)
+	waitListening(t, name, hostCh)
 
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
 	logs := &logBuffer{}
@@ -690,8 +700,7 @@ func TestHelloIsAnsweredOverAnOverlappedDevice(t *testing.T) {
 	name, hostCh := listenHost(t, nil)
 	// openDevice falls through to the stock candidates, and its error does
 	// not carry the pipe's, so wait for the pipe to listen first.
-	retryBusy(t, func() (*overlappedDevice, error) { return openOverlapped(name) }).Close() //nolint:errcheck
-	acceptHost(t, hostCh)
+	waitListening(t, name, hostCh)
 	onlyThisDevice(t)
 	var rwc io.ReadWriteCloser
 	retryOpen(t, func() (err error) {
