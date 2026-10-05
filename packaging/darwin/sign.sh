@@ -43,6 +43,23 @@ die() {
 	exit 1
 }
 
+# retry CMD...: runs CMD up to $STAPLE_ATTEMPTS times (default 5) with
+# doubling backoff from $STAPLE_DELAY seconds (default 15). stapler fetches the
+# ticket from Apple's CloudKit ticket service, which times out now and then
+# (NSURLErrorDomain -1001, exit 68), and a fresh ticket can take a moment to
+# propagate; neither should fail a release.
+retry() {
+	n=1
+	d=${STAPLE_DELAY:-15}
+	until "$@"; do
+		[ "$n" -lt "${STAPLE_ATTEMPTS:-5}" ] || return 1
+		echo "::warning::$* failed (attempt $n); retrying in ${d}s" >&2
+		sleep "$d"
+		n=$((n + 1))
+		d=$((d * 2))
+	done
+}
+
 team() {
 	[ -n "${APPLE_TEAM_ID:-}" ] || die "APPLE_TEAM_ID is not set"
 	printf '%s' "$APPLE_TEAM_ID"
@@ -171,7 +188,7 @@ cmd_package() { # cmd_package VERSION BIN_DIR OUT_DIR [ARCH]
 	fi
 	rm -f "$p8"
 
-	xcrun stapler staple "$pkg"
+	retry xcrun stapler staple "$pkg" || die "stapling $pkg failed"
 	cmd_verify_package "$pkg"
 	echo "$pkg"
 }
@@ -183,7 +200,7 @@ cmd_verify_package() {
 		die "$1: not signed by a Developer ID Installer identity of team $t"
 	grep -q 'Status: signed by a developer certificate issued by Apple' "$dir/check-signature.txt" ||
 		die "$1: signature does not chain to Apple"
-	xcrun stapler validate "$1"
+	retry xcrun stapler validate "$1" || die "$1: stapled ticket does not validate"
 	spctl -a -vv -t install "$1" 2>&1 | tee "$dir/spctl.txt"
 	grep -q 'accepted' "$dir/spctl.txt" || die "$1: Gatekeeper refuses it"
 	grep -q 'source=Notarized Developer ID' "$dir/spctl.txt" || die "$1: Gatekeeper does not see it as notarised"
