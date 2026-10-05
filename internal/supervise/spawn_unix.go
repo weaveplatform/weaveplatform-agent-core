@@ -262,18 +262,24 @@ func (t *target) authorizePeer() ipc.Authorizer {
 }
 
 // start spawns the module. Credentials and, on Linux, Pdeathsig ride
-// SysProcAttr; a macOS session launch switches identity through launchctl
+// SysProcAttr; a macOS session launch switches identity after launchctl
 // instead (see sessionCommand).
 func (t *target) start(bin string, extra []string, stdout, stderr io.Writer) (*child, error) {
-	cmd := t.buildCmd(bin, extra, stdout, stderr)
+	cmd, err := t.buildCmd(bin, extra, stdout, stderr)
+	if err != nil {
+		return nil, err
+	}
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("exec: %w", err)
 	}
 	return commandChild(cmd), nil
 }
 
-func (t *target) buildCmd(bin string, extra []string, stdout, stderr io.Writer) *exec.Cmd {
-	cmd, viaLauncher := t.command(bin)
+func (t *target) buildCmd(bin string, extra []string, stdout, stderr io.Writer) (*exec.Cmd, error) {
+	cmd, viaLauncher, err := t.command(bin)
+	if err != nil {
+		return nil, err
+	}
 	cmd.Env = t.env(extra)
 	if t.home != "" {
 		if fi, err := os.Stat(t.home); err == nil && fi.IsDir() {
@@ -289,16 +295,16 @@ func (t *target) buildCmd(bin string, extra []string, stdout, stderr io.Writer) 
 	}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	return cmd
+	return cmd, nil
 }
 
 // command builds the exec. viaLauncher reports that the command switches
 // identity itself, so SysProcAttr must not.
-func (t *target) command(bin string) (cmd *exec.Cmd, viaLauncher bool) {
+func (t *target) command(bin string) (cmd *exec.Cmd, viaLauncher bool, err error) {
 	if t.sess == nil {
 		// The supervisor owns the module's lifetime and stops it itself; a
 		// context-bound Cmd would kill the module when a context ended.
-		return exec.Command(bin), false //nolint:noctx // lifetime owned by the supervisor
+		return exec.Command(bin), false, nil //nolint:noctx // lifetime owned by the supervisor
 	}
 	return sessionCommand(bin, t.sess, t.drop)
 }

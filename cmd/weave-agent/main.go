@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/core"
+	"github.com/weaveplatform/weaveplatform-agent-core/internal/supervise"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/verify"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/version"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/wlog"
@@ -23,6 +24,7 @@ import (
 var (
 	coreRun            = core.Run
 	newChannelVerifier = verify.NewChannelFromDir
+	sessionExec        = supervise.SessionExec
 )
 
 func main() {
@@ -30,6 +32,12 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	// Before any flag parsing or logging: in this mode weave-agent is root
+	// for the moment it takes to drop to a console user and exec a module,
+	// and does nothing else.
+	if len(args) > 0 && args[0] == supervise.SessionExecCommand {
+		return sessionExec(args[1:], stderr)
+	}
 	fs := flag.NewFlagSet("weave-agent", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	stateDir := fs.String(

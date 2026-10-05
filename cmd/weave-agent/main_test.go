@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -186,5 +188,28 @@ func TestModuleRescanSetting(t *testing.T) {
 				t.Fatalf("ModuleRescan = %v, want %v", got.ModuleRescan, c.want)
 			}
 		})
+	}
+}
+
+// session-exec is dispatched before flags, and never starts core.
+func TestSessionExecMode(t *testing.T) {
+	stubCore(t, func(context.Context, core.Options) error {
+		t.Fatal("session-exec must not start core")
+		return nil
+	})
+	orig := sessionExec
+	t.Cleanup(func() { sessionExec = orig })
+	var got []string
+	sessionExec = func(args []string, _ io.Writer) int {
+		got = args
+		return 7
+	}
+	if code := run(
+		[]string{supervise.SessionExecCommand, "501", "20", "20", "/opt/mod"},
+		&bytes.Buffer{},
+		&bytes.Buffer{},
+	); code != 7 ||
+		!slices.Equal(got, []string{"501", "20", "20", "/opt/mod"}) {
+		t.Fatalf("exit %d, args %q", code, got)
 	}
 }

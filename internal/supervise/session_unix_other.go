@@ -15,6 +15,6 @@ import (
 // stays in core's cgroup rather than the session's scope, so logind's
 // KillUserProcesses does not reach it; core stops it when the watcher sees
 // the session end.
-func sessionCommand(bin string, _ *session.Session, _ *creds) (*exec.Cmd, bool) {
-	return exec.Command(bin), false //nolint:noctx // lifetime owned by the supervisor
+func sessionCommand(bin string, _ *session.Session, _ *creds) (*exec.Cmd, bool, error) {
+	return exec.Command(bin), false, nil //nolint:noctx // lifetime owned by the supervisor
 }
