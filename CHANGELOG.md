@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.9.8](https://github.com/weaveplatform/weaveplatform-agent-core/compare/v0.9.7...v0.9.8) (2026-10-05)
+
+
+### Bug Fixes
+
+* keep the macOS host channel draining and recover a broken stream ([dea4ad3](https://github.com/weaveplatform/weaveplatform-agent-core/commit/dea4ad3021c9b056a6046ef4d57c1a2b389c44a5))
+* macOS session modules, host channel stalls and weavectl's default socket ([542c404](https://github.com/weaveplatform/weaveplatform-agent-core/commit/542c404aa2285157141e2ace796ddd37f9be5c38))
+* point weavectl at the control socket weaveboot's core binds ([b96052a](https://github.com/weaveplatform/weaveplatform-agent-core/commit/b96052af4241757b3c3c7b856ea4052dd3fd034c))
+* run macOS session modules without chroot ([f4d64f9](https://github.com/weaveplatform/weaveplatform-agent-core/commit/f4d64f9cec7a8617752e46328e93d62278b37aff))
+
 ## [0.9.7](https://github.com/weaveplatform/weaveplatform-agent-core/compare/v0.9.6...v0.9.7) (2026-10-05)
 
 
