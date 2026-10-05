@@ -91,7 +91,7 @@ func (w *frameWatch) stalled(limit time.Duration) (bool, stallInfo) {
 	if w.hdrHave < len(w.hdr) {
 		info.declared, info.missing = 0, uint64(len(w.hdr)-w.hdrHave)
 	}
-	return w.hdrHave > 0 && info.idle > limit, info
+	return w.hdrHave > 0 && info.idle >= limit, info
 }
 
 type stallInfo struct {
