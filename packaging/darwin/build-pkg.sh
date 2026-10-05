@@ -6,8 +6,9 @@
 # BIN_DIR holds weaveboot, weave-agent, weavectl and weavemanifest built for
 # darwin/ARCH (default arm64). Writes OUT_DIR/weave-agent_VERSION_darwin_ARCH.pkg.
 # With WEAVE_PKG_SIGN_IDENTITY set (a "Developer ID Installer: ..." identity in
-# the keychain) the package is signed; without it, it is unsigned, and
-# installs with `installer -pkg ... -target /` (docs/macos-package.md).
+# the keychain, or in WEAVE_PKG_SIGN_KEYCHAIN) the package is signed, with a
+# secure timestamp; without it, it is unsigned. Releases sign and notarise it
+# through sign.sh (docs/macos-package.md).
 set -eu
 
 if [ $# -lt 3 ]; then
@@ -63,7 +64,10 @@ set -- --root "$root" --scripts "$scripts" \
 	--identifier run.weaveplatform.agent --version "$version" \
 	--install-location / --ownership recommended
 if [ -n "${WEAVE_PKG_SIGN_IDENTITY:-}" ]; then
-	set -- "$@" --sign "$WEAVE_PKG_SIGN_IDENTITY"
+	set -- "$@" --sign "$WEAVE_PKG_SIGN_IDENTITY" --timestamp
+	if [ -n "${WEAVE_PKG_SIGN_KEYCHAIN:-}" ]; then
+		set -- "$@" --keychain "$WEAVE_PKG_SIGN_KEYCHAIN"
+	fi
 fi
 pkgbuild "$@" "$pkg"
 echo "$pkg"
