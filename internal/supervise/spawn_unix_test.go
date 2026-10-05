@@ -218,7 +218,10 @@ func TestDroppedTargetPreparesTheTree(t *testing.T) {
 	if err := tgt.authorizePeer()(ipc.PeerCred{HasUID: true, UID: tgt.drop.uid}); err != nil {
 		t.Fatalf("dropped uid refused: %v", err)
 	}
-	cmd := tgt.buildCmd("/bin/true", nil, nil, nil)
+	cmd, err := tgt.buildCmd("/bin/true", nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if c := cmd.SysProcAttr.Credential; c == nil || c.Uid != tgt.drop.uid || c.Gid != tgt.drop.gid {
 		t.Fatalf("credential not applied: %+v", cmd.SysProcAttr.Credential)
 	}
@@ -419,7 +422,10 @@ func TestSessionBuildCmd(t *testing.T) {
 	sess := selfSession(t, 1)
 	home := t.TempDir()
 	tgt := &target{m: testManifest(), sess: &sess, home: home}
-	cmd := tgt.buildCmd("/opt/mod", nil, nil, nil)
+	cmd, err := tgt.buildCmd("/opt/mod", nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if cmd.Dir != home {
 		t.Fatalf("cmd.Dir = %q, want the user's home", cmd.Dir)
 	}
@@ -427,28 +433,32 @@ func TestSessionBuildCmd(t *testing.T) {
 		t.Fatal("credential set without a drop")
 	}
 	tgt.home = filepath.Join(home, "absent")
-	if cmd := tgt.buildCmd("/opt/mod", nil, nil, nil); cmd.Dir != "" {
-		t.Fatalf("missing home used as cwd: %q", cmd.Dir)
+	if cmd, err := tgt.buildCmd("/opt/mod", nil, nil, nil); err != nil || cmd.Dir != "" {
+		t.Fatalf("missing home used as cwd: %q (%v)", cmd.Dir, err)
 	}
 
 	tgt.drop = &creds{uid: 501, gid: 20, groups: []uint32{20, 12}}
-	cmd = tgt.buildCmd("/opt/mod", nil, nil, nil)
+	cmd, err = tgt.buildCmd("/opt/mod", nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if runtime.GOOS == "darwin" {
 		if cmd.SysProcAttr.Credential != nil {
-			t.Fatal("darwin: launchctl must run as root; chroot drops")
+			t.Fatal("darwin: launchctl must run as root; weave-agent drops after it")
+		}
+		self, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
 		}
 		want := []string{
 			"/bin/launchctl",
 			"asuser",
 			strconv.FormatUint(uint64(sess.UID), 10),
-			"/usr/sbin/chroot",
-			"-u",
+			self,
+			SessionExecCommand,
 			"501",
-			"-g",
 			"20",
-			"-G",
 			"20,12",
-			"/",
 			"/opt/mod",
 		}
 		if !slices.Equal(cmd.Args, want) {

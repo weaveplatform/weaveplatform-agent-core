@@ -127,3 +127,17 @@ func TestDirModes(t *testing.T) {
 		}
 	}
 }
+
+func TestRelocated(t *testing.T) {
+	t.Setenv(EnvStateDir, "")
+	if Relocated("") {
+		t.Fatal("no override, no environment: the platform layout")
+	}
+	if !Relocated("/x") {
+		t.Fatal("an override relocates")
+	}
+	t.Setenv(EnvStateDir, "/y")
+	if !Relocated("") {
+		t.Fatal("the environment relocates")
+	}
+}

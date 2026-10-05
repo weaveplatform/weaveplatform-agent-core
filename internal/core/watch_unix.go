@@ -6,12 +6,19 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync/atomic"
 	"time"
 )
 
 // watchRetry is how long the watch waits before trying again when the modules
 // directory is missing or the watch fails; the periodic rescan covers the gap.
-var watchRetry = 5 * time.Second
+// Atomic because a test shortens it while an earlier test's core may still be
+// watching.
+var watchRetry = func() *atomic.Int64 {
+	var d atomic.Int64
+	d.Store(int64(5 * time.Second))
+	return &d
+}()
 
 var errWatchRootGone = errors.New("modules directory removed or moved")
 
@@ -36,7 +43,7 @@ func watchModules(ctx context.Context, log *slog.Logger, dir string, notify func
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(watchRetry):
+		case <-time.After(time.Duration(watchRetry.Load())):
 		}
 	}
 }

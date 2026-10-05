@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"flag"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/weaveplatform/weaveplatform-agent-core/internal/layout"
+	"github.com/weaveplatform/weaveplatform-agent-core/internal/platform"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/weaveboot"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/winsvc"
 )
@@ -280,5 +284,51 @@ func TestServiceSubcommandDispatch(t *testing.T) {
 	); code != 0 ||
 		!strings.Contains(out.String(), "install") {
 		t.Fatalf("exit %d: %s", code, out.String())
+	}
+}
+
+// The packaged invocation (no --state-dir, no WEAVE_STATE_DIR) must leave
+// core on the platform layout, so its control socket is the one weavectl
+// dials by default (cmd/weavectl TestDefaultSocketIsPlatform) on every OS.
+// Passing the platform StateDir as --state-dir relocated the run dir under it.
+func TestPackagedInvocationKeepsPlatformLayout(t *testing.T) {
+	t.Setenv("WEAVE_STATE_DIR", "")
+	var got weaveboot.Options
+	stubBoot(t, func(_ context.Context, o weaveboot.Options) error {
+		got = o
+		return nil
+	})
+	if code := run(
+		[]string{"--", "--modules-dir", "/usr/lib/weave/modules"},
+		&bytes.Buffer{},
+	); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if want := []string{
+		"--modules-dir",
+		"/usr/lib/weave/modules",
+	}; !reflect.DeepEqual(
+		got.AgentArgs,
+		want,
+	) {
+		t.Fatalf("AgentArgs = %q, want %q", got.AgentArgs, want)
+	}
+	// Core reads --state-dir and resolves its layout from it, as weave-agent does.
+	fs := flag.NewFlagSet("weave-agent", flag.ContinueOnError)
+	stateDir := fs.String("state-dir", "", "")
+	fs.String("modules-dir", "", "")
+	if err := fs.Parse(got.AgentArgs); err != nil {
+		t.Fatal(err)
+	}
+	coreSocket := layout.Resolve(*stateDir).ControlSocket()
+	want := `\\.\pipe\weave-control`
+	if runtime.GOOS != "windows" {
+		want = filepath.Join(platform.Paths().RunDir, "control.sock")
+	}
+	if coreSocket != want {
+		t.Fatalf("core binds %q, want the platform's %q", coreSocket, want)
+	}
+	if got.CoreDir != filepath.Join(platform.Paths().StateDir, "core") {
+		t.Fatalf("CoreDir = %q", got.CoreDir)
 	}
 }

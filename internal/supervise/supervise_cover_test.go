@@ -36,7 +36,14 @@ var (
 	fixtureBins = map[string]string{}
 )
 
+// sessionExecEnv turns the test binary into weave-agent's session-exec mode,
+// so a real launch can run the same drop core's launch runs.
+const sessionExecEnv = "SUPERVISE_TEST_SESSION_EXEC"
+
 func TestMain(m *testing.M) {
+	if os.Getenv(sessionExecEnv) == "1" && len(os.Args) > 1 && os.Args[1] == SessionExecCommand {
+		os.Exit(SessionExec(os.Args[2:], os.Stderr))
+	}
 	if os.Getenv(childSleepEnv) == "1" {
 		time.Sleep(time.Minute)
 		os.Exit(0)

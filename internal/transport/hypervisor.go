@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/protocol/hvchannel"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/registry"
@@ -38,10 +39,12 @@ type HypervisorPeer struct {
 	log     *slog.Logger
 	deliver func(module, kind string, data []byte) *hvchannel.DeliveryFailed
 
-	conn io.Closer
-	r    *bufio.Reader
-	wmu  sync.Mutex // single writer
-	w    *bufio.Writer
+	conn  io.Closer
+	r     *bufio.Reader
+	watch *frameWatch
+	stall time.Duration // frameStall when the peer was made
+	wmu   sync.Mutex    // single writer
+	w     *bufio.Writer
 
 	// auth gates the wire in both directions until the peer has proved it holds
 	// this VM's key. Never nil: an unprovisioned guest gets one that refuses
@@ -78,20 +81,84 @@ func (m *Mux) ConnectHypervisor(
 	if attrs["port"] != "" || attrs["kind"] == unixKind {
 		return m.listenHypervisor(ctx, attrs, keyPath)
 	}
-	rwc, err := openDevice(attrs)
+	rwc, err := openChannelDevice(attrs)
 	if err != nil {
 		return fmt.Errorf("transport: opening hypervisor channel: %w", err)
 	}
-	p := newPeer(rwc, m.Log, m.deliver, newChannelAuth(m.Log, keyPath))
+	auth := newChannelAuth(m.Log, keyPath)
+	closed := m.attachDevice(ctx, rwc, auth)
+	go m.reopenDevice(ctx, attrs, auth, closed, openChannelDevice, reopenDelay)
+	return nil
+}
+
+// Seams for the reopen loop's tests.
+var (
+	openChannelDevice = openDevice
+	// reopenDelay paces reopening a device channel, so one that fails at once
+	// every time costs a log line a second rather than a core.
+	reopenDelay = time.Second
+)
+
+// attachDevice makes rwc the hypervisor peer and starts it. The returned
+// channel closes when its read loop has ended.
+func (m *Mux) attachDevice(
+	ctx context.Context,
+	rwc io.ReadWriteCloser,
+	auth *channelAuth,
+) <-chan struct{} {
+	closed := make(chan struct{})
+	p := newPeer(rwc, m.Log, m.deliver, auth)
 	p.modules = m.Registry
 	p.onAuthenticated = m.flushHypervisor
+	p.onClosed = func() {
+		m.clearHypervisor(p)
+		close(closed)
+	}
 	m.setHypervisor(p)
 	p.start(ctx)
 	// Drain anything queued while the channel was down. Before authentication
 	// this only gets as far as the first gated message; onAuthenticated
 	// drains the rest.
 	m.Flush(context.WithoutCancel(ctx))
-	return nil
+	return closed
+}
+
+// reopenDevice opens a device channel again whenever its read loop ends
+// before ctx does. A device is not dialled the way a socket is, so nobody else
+// will: before this, a read loop that ended — a stalled frame, an I/O error —
+// left the guest unreachable until core restarted. Each new open starts
+// unauthenticated, as a new socket connection does; the host's next call is
+// refused, and it authenticates again.
+func (m *Mux) reopenDevice(
+	ctx context.Context,
+	attrs map[string]string,
+	auth *channelAuth,
+	closed <-chan struct{},
+	open func(map[string]string) (io.ReadWriteCloser, error),
+	delay time.Duration,
+) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-closed:
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+			rwc, err := open(attrs)
+			if err != nil {
+				m.Log.Warn("hypervisor channel: reopening the device", "err", err)
+				continue
+			}
+			m.Log.Info("hypervisor channel: device reopened", "device", attrs["device"])
+			closed = m.attachDevice(ctx, rwc, auth.fresh())
+			break
+		}
+	}
 }
 
 // flushHypervisor drains the offline queue once a peer has authenticated.
@@ -126,11 +193,14 @@ func newPeer(
 	deliver func(module, kind string, data []byte) *hvchannel.DeliveryFailed,
 	auth *channelAuth,
 ) *HypervisorPeer {
+	watch := newFrameWatch(rwc)
 	return &HypervisorPeer{
 		log:     log,
 		deliver: deliver,
 		conn:    rwc,
-		r:       bufio.NewReader(rwc),
+		r:       bufio.NewReader(watch),
+		watch:   watch,
+		stall:   frameStall,
 		w:       bufio.NewWriter(rwc),
 		auth:    auth,
 	}
@@ -179,8 +249,11 @@ func (p *HypervisorPeer) write(env hvchannel.Envelope) error {
 // out to the addressed module's receivers via deliver, until the connection
 // errors or ctx ends.
 func (p *HypervisorPeer) readLoop(ctx context.Context) {
-	// The modules.changed pusher lives exactly as long as this connection.
+	// The modules.changed pusher and the stall watch live exactly as long as
+	// this connection.
 	ctx, cancel := context.WithCancel(ctx)
+	stalled := make(chan stallInfo, 1)
+	go p.watchStall(ctx, stalled)
 	defer func() {
 		cancel()
 		p.conn.Close()
@@ -200,6 +273,25 @@ func (p *HypervisorPeer) readLoop(ctx context.Context) {
 			if isFrameDecodeError(err) {
 				p.log.Warn("hypervisor channel: undecodable frame", "err", err)
 				continue
+			}
+			select {
+			case info := <-stalled:
+				p.log.Error(
+					"hypervisor channel: a frame stalled part-way; the stream has lost its "+
+						"place, so the channel is being reset",
+					"err",
+					errFrameStalled,
+					"frame_bytes",
+					info.declared,
+					"missing_bytes",
+					info.missing,
+					"idle",
+					info.idle.Round(time.Millisecond).String(),
+					"channel_bytes_read",
+					info.total,
+				)
+				return
+			default:
 			}
 			if !errors.Is(err, io.EOF) && ctx.Err() == nil {
 				p.log.Warn("hypervisor channel read ended", "err", err)
@@ -227,6 +319,28 @@ func (p *HypervisorPeer) readLoop(ctx context.Context) {
 		// unauthenticated hello for a missing module goes unanswered as before.
 		if failed != nil && p.auth.authenticated() {
 			p.reply(hvchannel.KindDeliveryFailed, env.ID, failed)
+		}
+	}
+}
+
+// watchStall closes the connection when a frame stops arriving part-way, which
+// ends the read loop: the framing has no resynchronisation, so a stream that
+// has lost bytes can only be recovered by starting a new one. Whoever owns the
+// channel then opens it again (a device) or the host redials (a socket), and
+// the host authenticates afresh.
+func (p *HypervisorPeer) watchStall(ctx context.Context, stalled chan<- stallInfo) {
+	t := time.NewTicker(p.stall / 4)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		if ok, info := p.watch.stalled(p.stall); ok {
+			stalled <- info
+			p.conn.Close()
+			return
 		}
 	}
 }

@@ -246,6 +246,12 @@ The envelope is `{"module": "hvchannel", "kind": "delivery.failed", "id": <the f
 | `not_running` | a module answers to it but has no receiver open; `state` (always set) and `detail` say why — `running` here means it is up but has not opened its receive stream yet | fail the call, or wait for a `modules.changed` showing it running and retry |
 | `busy` | the module's inbound queue (64 messages) is full | retry with backoff |
 
+A frame core cannot read at all — the stream lost bytes, so the length prefix is garbage or
+the frame never completes — ends the connection rather than the message: core resets the
+channel (architecture.md, "A lost byte is recovered by starting again") and the host's next
+call on it is refused with `auth.result` until it authenticates again. A host that re-auths
+on that refusal, as the SDK's client does, sees one failed call.
+
 Before authentication nothing changes: a gated op is refused with `auth.result`, and a hello
 for a module that is not there goes unanswered, because which modules a guest has is more than
 the pre-auth exemption is meant to disclose. A frame core does deliver gets no acknowledgement

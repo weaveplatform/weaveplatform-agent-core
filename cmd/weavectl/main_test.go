@@ -18,6 +18,7 @@ import (
 
 	agentv1 "github.com/weaveplatform/weaveplatform-agent-core/internal/gen/go/weave/agent/v1"
 	controlv1 "github.com/weaveplatform/weaveplatform-agent-core/internal/gen/go/weave/control/v1"
+	"github.com/weaveplatform/weaveplatform-agent-core/internal/platform"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/protocol/ipc"
 )
 
@@ -390,5 +391,27 @@ func TestDefaultSocketUnreachable(t *testing.T) {
 	code, _, errOut := ctl("status")
 	if code != 1 || !strings.Contains(errOut, "weavectl: status:") {
 		t.Fatalf("exit %d %q", code, errOut)
+	}
+}
+
+// weavectl's default is the control socket a weaveboot-started core binds:
+// the platform layout's (cmd/weaveboot TestPackagedInvocationKeepsPlatformLayout),
+// or the relocated root's when WEAVE_STATE_DIR names one for both.
+func TestDefaultSocketIsPlatform(t *testing.T) {
+	t.Setenv("WEAVE_STATE_DIR", "")
+	want := `\\.\pipe\weave-control`
+	if runtime.GOOS != "windows" {
+		want = filepath.Join(platform.Paths().RunDir, "control.sock")
+	}
+	if got := defaultSocket(); got != want {
+		t.Fatalf("default socket %q, want %q", got, want)
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	root := t.TempDir()
+	t.Setenv("WEAVE_STATE_DIR", root)
+	if got := defaultSocket(); got != filepath.Join(root, "run", "control.sock") {
+		t.Fatalf("relocated default socket %q", got)
 	}
 }

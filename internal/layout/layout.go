@@ -37,6 +37,12 @@ type Layout struct {
 	ExecDir string
 }
 
+// Relocated reports whether Resolve(override) moves the layout under one root
+// rather than returning the platform contract.
+func Relocated(override string) bool {
+	return override != "" || os.Getenv(EnvStateDir) != ""
+}
+
 // Resolve returns the layout, honouring override (highest precedence) then
 // EnvStateDir, then the platform contract.
 func Resolve(override string) Layout {

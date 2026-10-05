@@ -333,22 +333,36 @@ install on an unattended host. The first session start is still supervised.
 
 | OS | Mechanism |
 |---|---|
-| macOS | `launchctl asuser <uid> chroot -u <uid> -g <gid> -G <groups> / <module>` |
+| macOS | `launchctl asuser <uid> weave-agent session-exec <uid> <gid> <groups> <module>` |
 | Linux | plain exec with `SysProcAttr.Credential` (uid, gid, supplementary groups) and the session environment |
 | Windows | `WTSQueryUserToken` → `CreateEnvironmentBlock` → `CreateProcessAsUser` onto `winsta0\default` |
 
 **macOS.** The pasteboard and every other per-user GUI service are Mach services in the
 user's `gui/<uid>` launchd domain, reached through the bootstrap port a process inherits.
 A LaunchDaemon's setuid child is the right user in the wrong bootstrap: NSPasteboard finds
-no pasteboard server. `launchctl asuser` moves onto the user's bootstrap and execs in place;
-it leaves the process root, so `chroot(8)` — `-u -g -G`, then exec, also in place, with
-`chroot("/")` a no-op — drops to the user. Neither forks, so the pid core holds, the stdout
-handshake, exit status and kill all behave as for a direct child. Not a LaunchAgent
-bootstrapped into `gui/<uid>`: launchd would own the process and core would lose the
-handshake line, the exit status it classifies, and the kill on shutdown. Not
+no pasteboard server. `launchctl asuser` joins the user's audit session, moves onto their
+bootstrap and execs in place. Joining the audit session needs root (as the user it fails
+with "Could not switch to audit session: Operation not permitted"), so the drop cannot ride
+`SysProcAttr.Credential`, which would apply to launchctl itself. launchctl runs the next
+program as root, and that program is weave-agent's `session-exec` mode: `setgroups`,
+`setgid`, `setuid`, a check that the ids are exactly the target's and that `setuid(0)` now
+fails, then exec of the module, also in place. Nothing forks, so the pid core holds, the
+stdout handshake, exit status and kill all behave as for a direct child. The group list is
+capped at `NGROUPS_MAX` (16), primary group first.
+
+This used to be `chroot(8) -u -g -G / <module>`. macOS kills a hardened-runtime binary
+exec'd under chroot (`AMFI: hook..execve() hardened runtime not allowed in chroot`), and
+notarisation requires the hardened runtime, so every signed session module died before its
+handshake. The dropper is weave-agent rather than a helper binary of its own because
+weaveboot updates core by replacing weave-agent alone — a separate helper would drift from
+the core that calls it — and weave-agent is already signed, hardened and notarised. It is
+not left to the module to drop, because core does not hand third-party code root on trust
+that it will let go.
+
+Not a LaunchAgent bootstrapped into `gui/<uid>`: launchd would own the process and core
+would lose the handshake line, the exit status it classifies, and the kill on shutdown. Not
 `posix_spawn` with the user's audit session: joining one is private SPI, where
-`launchctl asuser` is the supported route to the same place. `-G` is capped at
-`NGROUPS_MAX` (16), primary group first.
+`launchctl asuser` is the supported route to the same place.
 
 **Linux.** There is no kernel session object to join: the session is its uid and what logind
 recorded, so the module gets the user's credentials and the environment above. It stays in
@@ -392,11 +406,15 @@ The watcher, runner and every OS decision are covered with fakes on all three OS
 launches into the tester's own session run in CI on macOS (through `launchctl asuser`,
 skipped where the runner has no GUI domain) and Linux (logind fixtures for the source).
 On Windows the launch path runs with the tester's own restricted token standing in for
-`WTSQueryUserToken`, on the inherited desktop. **Not verified by any automated test:** a
-root core's `chroot` drop on macOS and pasteboard access through it, a root core's
-credential drop into a real logind session, and a LocalSystem core launching onto a real
-user's `winsta0\default` — none of which a CI runner can provide. Those need a manual run
-on a machine with a logged-in console user.
+`WTSQueryUserToken`, on the inherited desktop. A root core's macOS drop has a test of its own,
+`TestSessionLaunchDropsForReal`: core's launch path with the test binary as the dropper,
+asserting uid, gid, groups and the `Aqua` bootstrap. It needs root and a console user, so
+it skips in CI and runs in a macOS guest (`supervise.test -test.run
+TestSessionLaunchDropsForReal` as root); the release modules' pasteboard and display
+access through it were checked by hand in a macOS 27 guest. **Not verified by any
+automated test:** a root core's credential drop into a real logind session, and a
+LocalSystem core launching onto a real user's `winsta0\default` — neither of which a CI
+runner can provide. Those need a manual run on a machine with a logged-in console user.
 
 ## Module install: stage → promote → rollback
 
@@ -448,9 +466,12 @@ stateDiagram-v2
 
 `internal/layout` resolves every directory core uses. The platform defaults come from
 `internal/platform`; `--state-dir` (or `WEAVE_STATE_DIR`) moves the whole tree under one
-root, which is how weaveboot always starts core — so on a packaged Linux install the run and
-log directories are `/var/lib/weave/run` and `/var/lib/weave/logs`, not the platform's
-`/run/weave` and `/var/log/weave`. Nothing below depends on which of the two it is.
+root. weaveboot passes `--state-dir` to core only when it was itself given one (the flag or
+the environment), so a packaged install runs on the platform layout and core's control
+socket is the one `weavectl` dials with no flags: `/run/weave/control.sock` on Linux,
+`/var/run/weave/control.sock` on macOS, `\\.\pipe\weave-control` on Windows. (Passing the
+platform's own state dir used to relocate the run and log directories under it, and
+`weavectl` without `-socket` found nothing.)
 
 | Directory | Linux | macOS | Windows | unix mode |
 |---|---|---|---|---|
@@ -604,6 +625,36 @@ just stops matching and the symptom is a guest that never answers.
 Core owns exactly one connection because the frame protocol has **no
 resynchronisation**: a second reader desynchronises the stream permanently rather
 than degrading it. One fd, one read loop, one write mutex.
+
+**A lost byte is recovered by starting again, not by resyncing.** The read loop
+follows the framing byte by byte (`internal/transport/framewatch.go`); a frame that
+goes 10 seconds without a byte part-way through is a stream that has lost its place —
+a host writes each frame in one go — so core closes the connection. A socket host
+redials; a device channel is **opened again by core** a second later (before, a device
+read loop that ended left the guest unreachable until core restarted), with stale
+input discarded. Either way the new connection starts unauthenticated, the host's
+next call is refused with `auth.result`, and the host authenticates again: one failed
+call, then a working channel. A garbage length after lost bytes ends the loop at once
+(`frame too large`) and takes the same path. This needs no wire change.
+
+**The macOS channel is a tty, and is drained on its own goroutine.** On a macOS guest
+the port is IOSerialFamily's `/dev/cu.org.weave.agent.0`, whose ~1 KiB input queue is
+filled by a kernel receive thread that blocks itself when the queue is full and is
+woken by the next `read()` or `select()` that finds the queue low. That check is not
+atomic with the block: a reader that drains the queue just before the thread blocks
+wakes nobody and sleeps in `read()` for bytes the sleeping thread holds. Under bulk
+host-to-guest traffic this wedged the channel within one or two 20 MB transfers; the
+goroutine dump showed the read loop inside a frame that declared tens of kilobytes
+and still needed most of them, with the host's pipe empty. Core therefore drains the
+tty into a 4 MiB userspace buffer and waits in `select()` with a 100 ms timeout,
+never in `read()`: every `select()` repeats the low-water check, so a lost wakeup is
+repaired within 100 ms. (The same drain with blocking reads wedged on the first 20 MB
+transfer.) The termios is `cfmakeraw`'s plus `CLOCAL`, with `IXOFF`, `IXANY` and
+`IMAXBEL` cleared. Linux's `/dev/virtio-ports` node is not a tty and is read as before.
+
+Core still drops an inbound frame when the addressed module's 64-message queue is full,
+and answers `busy` (PROTOCOL.md); the drain means a burst of those can slow the
+decoder without backing the device up behind it.
 
 ### Socket channels
 
