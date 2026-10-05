@@ -138,11 +138,15 @@ darwin-bin:
 package-test-darwin: darwin-bin
 	sh packaging/darwin/package_test.sh $(DARWIN_BIN)
 
-## shellcheck: the macOS package scripts
+## package-test-windows: Authenticode signing (sign.sh) end to end with a throwaway certificate (needs osslsigncode, openssl; reaches a public TSA)
+package-test-windows:
+	sh packaging/windows/sign_test.sh
+
+## shellcheck: the macOS and Windows packaging scripts
 shellcheck:
-	shellcheck -s sh packaging/darwin/*.sh packaging/darwin/scripts/preinstall packaging/darwin/scripts/postinstall
+	shellcheck -s sh packaging/darwin/*.sh packaging/darwin/scripts/preinstall packaging/darwin/scripts/postinstall packaging/windows/*.sh
 
 ## gate: everything CI runs, in order
 gate: vet lint test cover vuln build tidy-check buf-lint gen-check core-independent
 
-.PHONY: help fmt lint vet test cover vuln build tidy-check protoc-plugins buf-lint gen gen-check core-independent fuzz snapshot package-test pkg-darwin darwin-bin package-test-darwin shellcheck gate
+.PHONY: help fmt lint vet test cover vuln build tidy-check protoc-plugins buf-lint gen gen-check core-independent fuzz snapshot package-test pkg-darwin darwin-bin package-test-darwin package-test-windows shellcheck gate
