@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -143,13 +144,14 @@ func (r *runner) launch(ctx context.Context, sess *session.Session) (*proc, erro
 	// module crash forensics and produced spurious "exited before
 	// handshake" reports.
 	firstLine := make(chan string, 1)
+	stderrLog := &lineLog{log: log}
 	ch, err := tgt.start(bin, []string{
 		fmt.Sprintf("%s=%d", handshake.EnvProtocolMin, r.sup.Window.Min),
 		fmt.Sprintf("%s=%d", handshake.EnvProtocolMax, r.sup.Window.Max),
 		handshake.EnvToken + "=" + token,
 		handshake.EnvHostAddr + "=" + hostAddr,
 		handshake.EnvSocketDir + "=" + sockDir,
-	}, &lineCapture{ch: firstLine, max: 1 << 16}, &lineLog{log: log})
+	}, &lineCapture{ch: firstLine, max: 1 << 16}, stderrLog)
 	if err != nil {
 		return fail(err)
 	}
@@ -220,7 +222,7 @@ func (r *runner) launch(ctx context.Context, sess *session.Session) (*proc, erro
 	})
 	if err != nil {
 		conn.Close()
-		return cleanupProc(fmt.Errorf("init: %w", err))
+		return cleanupProc(exitedDuring("init", err, exitCode, exited, stderrLog))
 	}
 
 	// Runtime confirmation of requirements. The manifest gated launch;
@@ -240,7 +242,7 @@ func (r *runner) launch(ctx context.Context, sess *session.Session) (*proc, erro
 	defer cancelStart()
 	if _, err := client.Start(startCtx, &agentv1.StartRequest{}); err != nil {
 		conn.Close()
-		return cleanupProc(fmt.Errorf("start: %w", err))
+		return cleanupProc(exitedDuring("start", err, exitCode, exited, stderrLog))
 	}
 
 	return &proc{
@@ -353,12 +355,43 @@ func (w *lineCapture) emit(line string) {
 	}
 }
 
+// exitGrace is how long a failed Init or Start waits to learn whether the
+// module process has gone.
+var exitGrace = 2 * time.Second
+
+// exitedDuring words an RPC failure at stage. A module that dies after its
+// handshake line leaves core only the symptom: a dial to a pipe or socket
+// that no longer exists. When the process has exited, the error says so and
+// carries the module's last stderr line, which is usually the cause.
+func exitedDuring(
+	stage string,
+	err error,
+	exitCode <-chan int,
+	exited <-chan error,
+	stderr *lineLog,
+) error {
+	select {
+	case <-exitCode:
+		werr := <-exited
+		last := stderr.last()
+		if last == "" {
+			return fmt.Errorf("%s: module exited (%w): %w", stage, werr, err)
+		}
+		return fmt.Errorf("%s: module exited (%w; last stderr: %s): %w", stage, werr, last, err)
+	case <-time.After(exitGrace):
+		return fmt.Errorf("%s: %w", stage, err)
+	}
+}
+
 // lineLog is an io.Writer sink for a module's stderr that logs each
-// complete line to core, attributed. A trailing partial line is flushed
-// when the writer is closed by os/exec's copier finishing.
+// complete line to core, attributed, and keeps the last one for a failed
+// launch to report.
 type lineLog struct {
 	log *slog.Logger
 	buf []byte
+
+	mu       sync.Mutex
+	lastLine string
 }
 
 func (w *lineLog) Write(p []byte) (int, error) {
@@ -368,8 +401,19 @@ func (w *lineLog) Write(p []byte) (int, error) {
 		if i < 0 {
 			break
 		}
-		w.log.Info("module stderr", "line", string(w.buf[:i]))
+		line := strings.TrimRight(string(w.buf[:i]), "\r")
+		w.log.Info("module stderr", "line", line)
+		w.mu.Lock()
+		w.lastLine = line
+		w.mu.Unlock()
 		w.buf = w.buf[i+1:]
 	}
 	return len(p), nil
+}
+
+// last is the most recent complete stderr line, or "".
+func (w *lineLog) last() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.lastLine
 }

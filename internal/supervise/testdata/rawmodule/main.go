@@ -33,5 +33,16 @@ func main() {
 		}
 		fmt.Printf("WEAVE|1|1|%s|%s\n", network, addr)
 		time.Sleep(time.Hour)
+	case "die-after-handshake":
+		// What a module whose listener fails after the handshake line does:
+		// the address it named is gone before core dials it.
+		network := "unix"
+		addr := os.Getenv("WEAVE_SOCKET_DIR") + "/gone.sock"
+		if os.PathSeparator == '\\' {
+			network, addr = "npipe", `\\.\pipe\weave-rawmodule-gone`
+		}
+		fmt.Printf("WEAVE|1|1|%s|%s\n", network, addr)
+		fmt.Fprintln(os.Stderr, "grpc server: listener: Access is denied.")
+		os.Exit(1)
 	}
 }
