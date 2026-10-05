@@ -623,6 +623,36 @@ Core owns exactly one connection because the frame protocol has **no
 resynchronisation**: a second reader desynchronises the stream permanently rather
 than degrading it. One fd, one read loop, one write mutex.
 
+**A lost byte is recovered by starting again, not by resyncing.** The read loop
+follows the framing byte by byte (`internal/transport/framewatch.go`); a frame that
+goes 10 seconds without a byte part-way through is a stream that has lost its place —
+a host writes each frame in one go — so core closes the connection. A socket host
+redials; a device channel is **opened again by core** a second later (before, a device
+read loop that ended left the guest unreachable until core restarted), with stale
+input discarded. Either way the new connection starts unauthenticated, the host's
+next call is refused with `auth.result`, and the host authenticates again: one failed
+call, then a working channel. A garbage length after lost bytes ends the loop at once
+(`frame too large`) and takes the same path. This needs no wire change.
+
+**The macOS channel is a tty, and is drained on its own goroutine.** On a macOS guest
+the port is IOSerialFamily's `/dev/cu.org.weave.agent.0`, whose ~1 KiB input queue is
+filled by a kernel receive thread that blocks itself when the queue is full and is
+woken by the next `read()` or `select()` that finds the queue low. That check is not
+atomic with the block: a reader that drains the queue just before the thread blocks
+wakes nobody and sleeps in `read()` for bytes the sleeping thread holds. Under bulk
+host-to-guest traffic this wedged the channel within one or two 20 MB transfers; the
+goroutine dump showed the read loop inside a frame that declared tens of kilobytes
+and still needed most of them, with the host's pipe empty. Core therefore drains the
+tty into a 4 MiB userspace buffer and waits in `select()` with a 100 ms timeout,
+never in `read()`: every `select()` repeats the low-water check, so a lost wakeup is
+repaired within 100 ms. (The same drain with blocking reads wedged on the first 20 MB
+transfer.) The termios is `cfmakeraw`'s plus `CLOCAL`, with `IXOFF`, `IXANY` and
+`IMAXBEL` cleared. Linux's `/dev/virtio-ports` node is not a tty and is read as before.
+
+Core still drops an inbound frame when the addressed module's 64-message queue is full,
+and answers `busy` (PROTOCOL.md); the drain means a burst of those can slow the
+decoder without backing the device up behind it.
+
 ### Socket channels
 
 Hyper-V (HCS) guests have no virtio-serial. On vsock and HvSocket the **host
