@@ -90,7 +90,9 @@ func TestAuthenticodeAcceptsATrustedSelfSignedModule(t *testing.T) {
 
 	t.Cleanup(func() { _ = certtrust.Untrust(certtrust.LocalMachine, cert.Thumbprint) })
 	if err := certtrust.Trust(certtrust.LocalMachine, cert); err != nil {
-		if errors.Is(err, syscall.ERROR_ACCESS_DENIED) {
+		// CI says it is elevated: a refusal there is a failure, not a reason
+		// to skip.
+		if errors.Is(err, syscall.ERROR_ACCESS_DENIED) && os.Getenv("WEAVE_TEST_WINDOWS_ELEVATED") != "1" {
 			t.Skipf("not elevated: %v", err)
 		}
 		t.Fatal(err)

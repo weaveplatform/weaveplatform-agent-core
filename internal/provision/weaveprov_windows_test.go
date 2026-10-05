@@ -105,12 +105,12 @@ func freeLetter(t *testing.T) string {
 // with the label WEAVEPROV holding weave\channel.pub, first attached
 // read-write (refused: anyone could have written it), then read-only
 // (installed). This is the shape the guestweave hosts attach. It needs
-// diskpart, so an elevated token; CI's Windows runner sets
-// WEAVE_TEST_WEAVEPROV=1 to run it.
+// diskpart, so an elevated token; CI's Windows runner, which has one, sets
+// WEAVE_TEST_WINDOWS_ELEVATED=1 to run it.
 func TestRealProvisioningVolume(t *testing.T) {
-	if os.Getenv("WEAVE_TEST_WEAVEPROV") != "1" {
+	if os.Getenv("WEAVE_TEST_WINDOWS_ELEVATED") != "1" {
 		t.Skip(
-			"set WEAVE_TEST_WEAVEPROV=1 on an elevated Windows host to attach a real WEAVEPROV disk",
+			"set WEAVE_TEST_WINDOWS_ELEVATED=1 on an elevated Windows host to attach a real WEAVEPROV disk",
 		)
 	}
 	// The long form of the path: the virtual disk service matches a disk by

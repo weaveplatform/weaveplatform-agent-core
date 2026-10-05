@@ -55,12 +55,14 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      # WEAVE_TEST_WEAVEPROV: the runner is elevated, so the provisioning
-      # test attaches a real WEAVEPROV virtual disk (internal/provision).
+      # WEAVE_TEST_WINDOWS_ELEVATED: the Windows runner is elevated, so the
+      # tests that need that run, and fail rather than skip: a real WEAVEPROV
+      # virtual disk (internal/provision), and certificates trusted in the
+      # LocalMachine stores (internal/certtrust, internal/verify).
       - name: Unit tests (race, shuffle, coverage)
         run: make test
         env:
-          WEAVE_TEST_WEAVEPROV: ${{ runner.os == 'Windows' && '1' || '' }}
+          WEAVE_TEST_WINDOWS_ELEVATED: ${{ runner.os == 'Windows' && '1' || '' }}
 
       - name: Upload unit coverage
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

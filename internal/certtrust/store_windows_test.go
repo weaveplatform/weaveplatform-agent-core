@@ -2,6 +2,7 @@ package certtrust
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"syscall"
 	"testing"
@@ -11,7 +12,9 @@ import (
 // cannot. CI's Windows runner is elevated, so there it always runs.
 func elevated(t *testing.T, err error) {
 	t.Helper()
-	if errors.Is(err, syscall.ERROR_ACCESS_DENIED) {
+	// CI says it is elevated: a refusal there is a failure, not a reason
+	// to skip.
+	if errors.Is(err, syscall.ERROR_ACCESS_DENIED) && os.Getenv("WEAVE_TEST_WINDOWS_ELEVATED") != "1" {
 		t.Skipf("not elevated: %v", err)
 	}
 }
