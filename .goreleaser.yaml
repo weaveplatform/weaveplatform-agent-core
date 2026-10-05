@@ -4,9 +4,12 @@
 # three binaries.
 #
 # Zone A throughout: pure Go, CGO_ENABLED=0, every target cross-compiled
-# from one runner. This signs the release archives (cosign, keyless);
-# platform code signing of the binaries themselves (codesign/notarize,
-# Authenticode) is the packaging pipeline's job, not this one's.
+# from one runner. This signs the release archives (cosign, keyless). The
+# darwin binaries are Developer ID signed as each is built, before anything is
+# archived or checksummed (the post hook below, packaging/darwin/sign.sh), so
+# the darwin archives, the checksum file and its cosign bundle all describe
+# the signed binaries. The release workflow runs this on macOS for codesign;
+# a local snapshot with no signing keychain leaves them unsigned.
 version: 2
 
 project_name: weaveplatform-agent
@@ -31,6 +34,10 @@ builds:
       - -s -w
       - -X github.com/weaveplatform/weaveplatform-agent-core/internal/version.Version={{ .Version }}
     mod_timestamp: "{{ .CommitTimestamp }}"
+    hooks:
+      post:
+        - cmd: sh packaging/darwin/sign.sh binary {{ .Target }} {{ .Path }}
+          output: true
 
   - id: weaveboot
     main: ./cmd/weaveboot
@@ -45,6 +52,10 @@ builds:
       - -s -w
       - -X github.com/weaveplatform/weaveplatform-agent-core/internal/version.Version={{ .Version }}
     mod_timestamp: "{{ .CommitTimestamp }}"
+    hooks:
+      post:
+        - cmd: sh packaging/darwin/sign.sh binary {{ .Target }} {{ .Path }}
+          output: true
 
   - id: weavectl
     main: ./cmd/weavectl
@@ -59,6 +70,10 @@ builds:
       - -s -w
       - -X github.com/weaveplatform/weaveplatform-agent-core/internal/version.Version={{ .Version }}
     mod_timestamp: "{{ .CommitTimestamp }}"
+    hooks:
+      post:
+        - cmd: sh packaging/darwin/sign.sh binary {{ .Target }} {{ .Path }}
+          output: true
 
   # The channel-manifest signing tool. Ships with core because it IS core's
   # verifier with a keygen/sign front end; weaveplatform-release-channels runs it
@@ -75,6 +90,10 @@ builds:
     ldflags:
       - -s -w
     mod_timestamp: "{{ .CommitTimestamp }}"
+    hooks:
+      post:
+        - cmd: sh packaging/darwin/sign.sh binary {{ .Target }} {{ .Path }}
+          output: true
 
 archives:
   - id: weaveplatform-agent
@@ -197,10 +216,11 @@ release:
     Binaries are pure Go (Zone A) and require no runtime dependencies. Each
     archive carries `weaveboot`, `weave-agent` and `weavectl` for one platform;
     the Windows zips add `install.ps1`, the unattended installer.
-    `weave-agent_{{ .Version }}_darwin_arm64.pkg` (attached a few minutes after
-    the rest, unsigned) installs the agent in a macOS guest with
-    `sudo installer -pkg … -target /`; verify it against its own
-    `.sigstore.json` bundle the same way as the checksum file below.
+    The darwin binaries are signed with the weaveplatform Developer ID (team
+    5GM6DW5337). `weave-agent_{{ .Version }}_darwin_arm64.pkg` (attached a few
+    minutes after the rest) is signed and notarised, and installs the agent in
+    a macOS guest with `sudo installer -pkg … -target /`; verify it against
+    its own `.sigstore.json` bundle the same way as the checksum file below.
 
     Verify a download against the signed checksum file:
 

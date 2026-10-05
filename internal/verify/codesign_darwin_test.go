@@ -90,3 +90,25 @@ func TestCodesignVerifyEvaluatesTheRequirement(t *testing.T) {
 		t.Fatalf("want a requirement failure, got: %v", err)
 	}
 }
+
+// A binary signed by a real Developer ID identity: core accepts it for the
+// team that signed it and refuses it for any other. No test machine holds the
+// identity, so this runs only where the release workflow has just signed one
+// (WEAVE_SIGNED_BINARY, WEAVE_SIGNED_TEAM); everywhere else it skips.
+func TestCodesignAcceptsARealSignature(t *testing.T) {
+	bin, team := os.Getenv("WEAVE_SIGNED_BINARY"), os.Getenv("WEAVE_SIGNED_TEAM")
+	if bin == "" || team == "" {
+		t.Skip("no Developer ID signed binary given (WEAVE_SIGNED_BINARY, WEAVE_SIGNED_TEAM)")
+	}
+	if err := codesignVerify(bin, testManifest(team)); err != nil {
+		t.Fatalf("a binary signed by team %s refused: %v", team, err)
+	}
+	other := "ZZZZZZZZZZ"
+	if team == other {
+		other = "YYYYYYYYYY"
+	}
+	err := codesignVerify(bin, testManifest(other))
+	if err == nil || !strings.Contains(err.Error(), "failed to satisfy") {
+		t.Fatalf("a binary signed by team %s accepted for team %s: %v", team, other, err)
+	}
+}

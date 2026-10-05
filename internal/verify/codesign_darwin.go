@@ -76,7 +76,10 @@ func codesignVerify(path string, m *manifest.Manifest) error {
 
 	// Defense in depth: confirm the TeamIdentifier text too, and reject
 	// ad-hoc/no-team binaries explicitly.
-	display := exec.CommandContext(ctx, codesignPath, "-d", "-vv", path)
+	// path is the module binary under verification, passed as one argument
+	// to the pinned codesign; no shell is involved.
+	display := exec.CommandContext( //nolint:gosec // G702: see above
+		ctx, codesignPath, "-d", "-vv", path)
 	var out bytes.Buffer
 	display.Stderr = &out // codesign -d writes details to stderr.
 	if err := display.Run(); err != nil {

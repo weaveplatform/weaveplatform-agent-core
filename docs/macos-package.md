@@ -6,16 +6,59 @@ How core gets onto a macOS guest, what it puts where, and how to take it off aga
 
 | Artifact | Built by | Attached to each release as |
 |---|---|---|
-| A flat component package, identifier `run.weaveplatform.agent` | `packaging/darwin/build-pkg.sh` (`pkgbuild`), run by `release.yml` on a macOS runner from the darwin/arm64 binaries goreleaser released | `weave-agent_<version>_darwin_arm64.pkg`, plus a cosign bundle `…pkg.sigstore.json` |
+| A flat component package, identifier `run.weaveplatform.agent` | `packaging/darwin/build-pkg.sh` (`pkgbuild`), run through `packaging/darwin/sign.sh` by `release.yml` on a macOS runner from the darwin/arm64 binaries goreleaser released | `weave-agent_<version>_darwin_arm64.pkg`, plus a cosign bundle `…pkg.sigstore.json` |
 
 arm64 only: macOS guests under Virtualization.framework exist only on Apple silicon. The
 `preinstall` script refuses any other architecture and any macOS before 12 (Go's minimum)
 before anything is unpacked.
 
-**It is not signed or notarised.** No Developer ID Installer identity is configured for this
-repository. `build-pkg.sh` signs when `WEAVE_PKG_SIGN_IDENTITY` names one in the keychain;
-notarisation would follow that. Until then, provenance is the cosign bundle, checked the
-same way as the release's checksum file:
+## Signing and notarisation
+
+Everything macOS runs from a release is signed with the weaveplatform Developer ID, team
+`5GM6DW5337`:
+
+- **The binaries.** `weaveboot`, `weave-agent`, `weavectl` and `weavemanifest`, for both
+  darwin architectures, are signed with the **Developer ID Application** identity, with the
+  hardened runtime and a secure timestamp, as goreleaser builds them (a post-build hook
+  running `sign.sh binary`). That happens before anything is archived or checksummed, so the
+  `weaveplatform-agent_<version>_darwin_*.tar.gz` archives hold the signed binaries, and the
+  checksum file and its cosign bundle describe exactly those.
+- **The package.** It is built from those same binaries (`sign.sh` refuses one without the
+  team's signature), signed with the **Developer ID Installer** identity, notarised by Apple
+  with `notarytool`, and the ticket is stapled to it. The binaries inside are covered by the
+  same notarisation.
+- **The cosign bundle** is still attached and still checks as before: it says the package came
+  from this repository's release workflow, which Apple's signature does not.
+
+The signing identities are found by kind and team in a throwaway keychain the workflow makes
+and deletes in every job; the secrets behind them exist only in GitHub Actions. Running
+`release.yml` by hand (`gh workflow run release.yml --ref <branch>`) is a dry run that signs
+and notarises a snapshot package and uploads it as a workflow artifact without publishing
+anything.
+
+### Verifying a download
+
+```sh
+pkgutil --check-signature weave-agent_<version>_darwin_arm64.pkg
+#   Status: signed by a developer certificate issued by Apple for distribution
+#   Notarization: trusted by the Apple notary service
+#   1. Developer ID Installer: … (5GM6DW5337)
+spctl -a -vv -t install weave-agent_<version>_darwin_arm64.pkg
+#   …: accepted
+#   source=Notarized Developer ID
+xcrun stapler validate weave-agent_<version>_darwin_arm64.pkg
+#   The validate action worked!
+```
+
+A binary, from the archive or after installing:
+
+```sh
+codesign --verify --strict --verbose=2 /usr/local/libexec/weave/weave-agent
+codesign -dv /usr/local/libexec/weave/weave-agent 2>&1 | grep TeamIdentifier
+#   TeamIdentifier=5GM6DW5337
+```
+
+And provenance, the same way as the release's checksum file:
 
 ```sh
 cosign verify-blob \
@@ -27,7 +70,8 @@ cosign verify-blob \
 
 Core's own verification does not depend on the package's signature: on macOS core checks
 every module binary's code signature against the Team ID its manifest pins before each launch
-(`internal/verify/codesign_darwin.go`).
+(`internal/verify/codesign_darwin.go`). The release workflow runs that verifier against the
+signed `weave-agent` too (`TestCodesignAcceptsARealSignature`).
 
 ## Installing
 
@@ -37,9 +81,10 @@ In the guest, as an administrator:
 sudo installer -pkg weave-agent_<version>_darwin_arm64.pkg -target /
 ```
 
-The command-line installer installs an unsigned package without a Gatekeeper prompt. Opening
-the same file in Installer.app from a browser download is refused (it is unsigned and
-quarantined); use the command line.
+The package is signed and notarised, so it needs no Gatekeeper override: the command line
+installs it as it is, and Installer.app opens a browser download of it (quarantined or not)
+without a Gatekeeper warning. Releases before signing began (0.9.5 and earlier) were unsigned and
+installed only from the command line.
 
 `postinstall` then makes the service account and loads the daemon (below). It is safe to
 run again, and that is how an upgrade works: the same command with a newer package.
@@ -179,6 +224,9 @@ What stays, and why:
   changes who may drive the guest. `weave seal` removes it before a template is cloned.
 
 ## Checking a build without installing it
+
+A local build is unsigned unless `WEAVE_PKG_SIGN_IDENTITY` names a Developer ID Installer
+identity in the keychain; that is enough to inspect it.
 
 ```sh
 make pkg-darwin              # dist/weave-agent_<version>_darwin_arm64.pkg
