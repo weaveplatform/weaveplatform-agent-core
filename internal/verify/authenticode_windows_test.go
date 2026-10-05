@@ -11,21 +11,9 @@ import (
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/protocol/manifest"
 )
 
-// These are Windows-host handoff tests for the Authenticode verifier. They
-// need a Windows machine with PowerShell to mint a self-signed cert and
-// sign a binary. Run on Windows: `go test ./internal/verify/`.
-//
-// What they must prove:
-//   1. an unsigned binary is refused;
-//   2. a binary signed by a self-signed cert (untrusted chain) is refused —
-//      this is the Authenticode analogue of the macOS "anchor apple" gap;
-//   3. a thumbprint mismatch is refused when the manifest pins a thumbprint.
-//
-// Setup sketch (PowerShell), for the LLM running this on Windows:
-//   $c = New-SelfSignedCertificate -Type CodeSigning -Subject "CN=WeaveTest" `
-//        -CertStoreLocation Cert:\CurrentUser\My
-//   Set-AuthenticodeSignature -FilePath test.exe -Certificate $c
-//   # $c.Thumbprint is the SHA-1 thumbprint to pin.
+// The Authenticode verifier's refusals. The end-to-end acceptance of a
+// trusted self-signed module is authenticode_trust_windows_test.go; the pin
+// comparison is authenticode_pin_windows_test.go.
 
 func testMod(subject, thumbprint string) *manifest.Manifest {
 	m := &manifest.Manifest{

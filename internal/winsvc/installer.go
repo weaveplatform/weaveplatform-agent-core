@@ -3,23 +3,40 @@ package winsvc
 import (
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/weaveplatform/weaveplatform-agent-core/internal/certtrust"
 )
 
 // Payload is the set of binaries an install places in the install
-// directory. All three travel together (spec.md §9); weaveboot finds core as
+// directory. They travel together (spec.md §9); weaveboot finds core as
 // "the binary beside me" on a fresh install, so they must be siblings.
-var Payload = []string{"weaveboot", "weave-agent", "weavectl"}
+var Payload = []string{"weaveboot", "weave-agent", "weavectl", "weavemanifest"}
 
-// ModulesDirName is the package-owned module tree under the install
-// directory, the counterpart of /usr/lib/weave/modules.
-const ModulesDirName = "modules"
+// Names in the install directory beside the payload.
+const (
+	// ModulesDirName is the package-owned module tree, the counterpart of
+	// /usr/lib/weave/modules.
+	ModulesDirName = "modules"
+	// CertFileName is the trusted code-signing certificate, kept so an
+	// uninstall knows which certificate the install trusted.
+	CertFileName = "weave-codesign.crt"
+	// UninstallScript is core's uninstaller, copied from the media when it
+	// is there.
+	UninstallScript = "uninstall.ps1"
+	// UninstallDirName holds one <id>.ps1 per module package installed after
+	// core (agent-modules' packaging/modulezip): the record of which weave
+	// packages are still on the machine.
+	UninstallDirName = "uninstall.d"
+)
 
 func exe(name string) string {
 	if runtime.GOOS == "windows" {
@@ -47,9 +64,14 @@ type Installer struct {
 	ChannelKeyDest string
 	// Restrict applies the state-root ACL; RestrictDir in production.
 	Restrict func(dir string) error
-	Start    bool
-	Waits    Waits
-	Log      io.Writer
+	// TrustCert, when set, is the module code-signing certificate to trust
+	// machine-wide, through Trust (certtrust.Trust at LocalMachine in
+	// production). A copy is kept in InstallDir as CertFileName.
+	TrustCert string
+	Trust     func(*certtrust.Certificate) error
+	Start     bool
+	Waits     Waits
+	Log       io.Writer
 }
 
 // Run performs the install. Every step is idempotent, so a failed install is
@@ -76,6 +98,14 @@ func (in Installer) Run() error {
 		}
 		key = k
 	}
+	var cert *certtrust.Certificate
+	if in.TrustCert != "" {
+		c, err := certtrust.Load(in.TrustCert)
+		if err != nil {
+			return fmt.Errorf("winsvc: code-signing certificate: %w", err)
+		}
+		cert = c
+	}
 
 	// A running service holds its binaries open, and Windows refuses to
 	// replace a mapped image, so a re-install that copies stops it first —
@@ -100,6 +130,9 @@ func (in Installer) Run() error {
 	if err := InstallFiles(in.SourceDir, in.InstallDir); err != nil {
 		return err
 	}
+	if pkgs := packageIDs(in.InstallDir); len(pkgs) > 0 {
+		in.logf("left module packages as they are: %s", strings.Join(pkgs, ", "))
+	}
 	if err := os.MkdirAll(in.StateDir, 0o700); err != nil {
 		return fmt.Errorf("winsvc: creating state root %s: %w", in.StateDir, err)
 	}
@@ -113,6 +146,13 @@ func (in Installer) Run() error {
 		in.logf("installing channel key at %s", in.ChannelKeyDest)
 		if err := writeAtomic(in.ChannelKeyDest, key, 0o644); err != nil {
 			return fmt.Errorf("winsvc: writing channel key: %w", err)
+		}
+	}
+	// Before the service starts: core verifies every module against this
+	// trust at its first discovery.
+	if cert != nil {
+		if err := in.trust(cert); err != nil {
+			return err
 		}
 	}
 	created, err := Install(in.Manager, cfg)
@@ -129,6 +169,22 @@ func (in Installer) Run() error {
 	}
 	in.logf("starting %s", cfg.Name)
 	return Start(in.Manager, cfg.Name, in.Waits)
+}
+
+// trust keeps a copy of the certificate beside the binaries, then trusts it.
+// The copy goes first: an uninstall finds the thumbprint there, so a trust
+// it could not find would be one it could never remove.
+func (in Installer) trust(c *certtrust.Certificate) error {
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.DER})
+	if err := writeAtomic(filepath.Join(in.InstallDir, CertFileName), pemBytes, 0o644); err != nil {
+		return fmt.Errorf("winsvc: keeping the code-signing certificate: %w", err)
+	}
+	in.logf("trusting code-signing certificate %s (%s) in %s",
+		c.Thumbprint, c.Subject, strings.Join(certtrust.Stores, " and "))
+	if err := in.Trust(c); err != nil {
+		return fmt.Errorf("winsvc: trusting the code-signing certificate: %w", err)
+	}
+	return nil
 }
 
 func (in Installer) logf(format string, a ...any) {
@@ -176,20 +232,92 @@ func InstallFiles(src, dst string) error {
 			return err
 		}
 	}
+	// Optional: a zip from before core shipped an uninstaller has none.
+	if _, err := os.Stat(filepath.Join(src, UninstallScript)); err == nil {
+		if err := copyFile(
+			filepath.Join(src, UninstallScript),
+			filepath.Join(dst, UninstallScript),
+		); err != nil {
+			return err
+		}
+	}
 	srcModules := filepath.Join(src, ModulesDirName)
 	dstModules := filepath.Join(dst, ModulesDirName)
 	if fi, err := os.Stat(srcModules); err == nil && fi.IsDir() {
-		// Replaced wholesale: the tree is package-owned, like
-		// /usr/lib/weave/modules, so a module dropped from the media must
-		// not survive the re-install.
-		if err := os.RemoveAll(dstModules); err != nil {
-			return fmt.Errorf("winsvc: clearing %s: %w", dstModules, err)
-		}
-		if err := copyTree(srcModules, dstModules); err != nil {
+		if err := installModules(srcModules, dst); err != nil {
 			return err
 		}
 	}
 	return mkdir(dstModules)
+}
+
+// installModules brings the modules tree in dst in line with the media's,
+// module by module, except for the modules a module package owns.
+//
+// Two installers write the tree. Core's media installs the modules it
+// carries, and those it no longer carries must not survive a re-install, so
+// each is replaced whole and any other is removed. agent-modules' module
+// zips install one module each after core, and record it as
+// uninstall.d\<id>.ps1; such a module belongs to its package, not to the
+// media, so an upgrade of core leaves it exactly as it is — even when the
+// media carries the same id, since the package is the later and more
+// deliberate choice. Its own uninstaller removes it.
+func installModules(srcModules, dst string) error {
+	dstModules := filepath.Join(dst, ModulesDirName)
+	owned := map[string]bool{}
+	for _, id := range packageIDs(dst) {
+		owned[id] = true
+	}
+	media := map[string]bool{}
+	entries, err := os.ReadDir(srcModules)
+	if err != nil {
+		return fmt.Errorf("winsvc: reading %s: %w", srcModules, err)
+	}
+	for _, e := range entries {
+		media[e.Name()] = true
+		if owned[e.Name()] {
+			continue
+		}
+		target := filepath.Join(dstModules, e.Name())
+		if err := os.RemoveAll(target); err != nil {
+			return fmt.Errorf("winsvc: clearing %s: %w", target, err)
+		}
+		if !e.IsDir() {
+			if err := copyFile(filepath.Join(srcModules, e.Name()), target); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := copyTree(filepath.Join(srcModules, e.Name()), target); err != nil {
+			return err
+		}
+	}
+	existing, err := os.ReadDir(dstModules)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("winsvc: reading %s: %w", dstModules, err)
+	}
+	for _, e := range existing {
+		if media[e.Name()] || owned[e.Name()] {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(dstModules, e.Name())); err != nil {
+			return fmt.Errorf("winsvc: removing %s: %w", e.Name(), err)
+		}
+	}
+	return nil
+}
+
+// packageIDs lists the module packages installed in dir after core: their
+// ids, from uninstall.d\<id>.ps1.
+func packageIDs(dir string) []string {
+	entries, _ := os.ReadDir(filepath.Join(dir, UninstallDirName))
+	var ids []string
+	for _, e := range entries {
+		if id, ok := strings.CutSuffix(e.Name(), ".ps1"); ok && !e.IsDir() {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // mkdir creates dir and its parents with the install tree's mode.
@@ -201,10 +329,10 @@ func mkdir(dir string) error {
 }
 
 func needsCopy(src, dst string) bool {
-	return src != "" && !sameDir(src, dst)
+	return src != "" && !samePath(src, dst)
 }
 
-func sameDir(a, b string) bool {
+func samePath(a, b string) bool {
 	ai, err := os.Stat(a)
 	if err != nil {
 		return false
