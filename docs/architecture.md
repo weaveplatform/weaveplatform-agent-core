@@ -687,6 +687,29 @@ repaired within 100 ms. (The same drain with blocking reads wedged on the first 
 transfer.) The termios is `cfmakeraw`'s plus `CLOCAL`, with `IXOFF`, `IXANY` and
 `IMAXBEL` cleared. Linux's `/dev/virtio-ports` node is not a tty and is read as before.
 
+**On Windows the port is opened for overlapped I/O** (`FILE_FLAG_OVERLAPPED`,
+`internal/transport/hypervisor_device_windows.go`), and that is a correctness
+requirement. Windows serialises every operation on a handle opened synchronously, which
+is how `os.OpenFile` opens one: a `WriteFile` waits behind the `ReadFile` in flight on the
+same handle, and the read loop always has one in flight. Through v0.9.9 core opened the
+port that way, so each reply left only when the host's next write completed the pending
+read — host traces showed the guest's bytes arriving in the same millisecond as the
+host's next frame — and every `weave.presence.hello` missed its 3 s window on a Windows 11
+guest, which never authenticated. Now each direction owns an `OVERLAPPED` and a
+manual-reset event: the read loop's read and the writer's writes are issued independently
+and each waits in `GetOverlappedResult`, so a read pending forever never holds up a
+write. `Close` cancels everything on the handle (`CancelIoEx`), waits for the cancelled
+operations to complete and only then closes the handle, so the stall watch and the read
+loop can close it from any goroutine; a cancelled operation reports `os.ErrClosed`. The
+far end going away (`ERROR_BROKEN_PIPE`, `ERROR_HANDLE_EOF`) reads as EOF, and any other
+I/O failure — the device being removed — ends the read loop, which reopens the device.
+The Windows tests drive this over a named pipe opened the same way, and pin the root
+cause by showing a synchronously opened pipe holding a write behind a pending read. The
+HvSocket channel is a Winsock socket, whose sends and receives already proceed
+independently, so it needed no change. Not yet exercised: the overlapped device on a real
+vioserial port (the fix is built from the field traces, not yet run against them), and
+`\\.\COM2`, whose default comm timeouts are left as they were.
+
 Core still drops an inbound frame when the addressed module's 64-message queue is full,
 and answers `busy` (PROTOCOL.md); the drain means a burst of those can slow the
 decoder without backing the device up behind it.
