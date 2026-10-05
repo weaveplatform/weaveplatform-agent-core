@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/Microsoft/go-winio"
 	"github.com/deploymenttheory/go-bindings-win32/bindings/win32/foundation"
+	"github.com/deploymenttheory/go-bindings-win32/bindings/win32/storage/filesystem"
 	systemio "github.com/deploymenttheory/go-bindings-win32/bindings/win32/system/io"
 
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/protocol/hvchannel"
@@ -203,6 +205,347 @@ func TestOverlappedWriteCompletesWhileReadPending(t *testing.T) {
 	if r.err != nil || string(buf[:r.n]) != "abc" {
 		t.Fatalf("read %q, %v", buf[:r.n], r.err)
 	}
+}
+
+// A frame far larger than one device write goes out whole, in order, while
+// the read loop's read stays pending, and the read still gets what the host
+// sends afterwards.
+func TestOverlappedLargeFrameWhileReadPending(t *testing.T) {
+	dev, host := devicePair(t, nil)
+	buf := make([]byte, 4096)
+	read := pendingRead(dev, buf)
+	assertPending(t, "the read", read)
+
+	payload := make([]byte, 64<<10)
+	if _, err := rand.Read(payload); err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan []byte, 1)
+	go func() {
+		b, err := hvchannel.ReadFrame(host)
+		if err != nil {
+			t.Error(err)
+		}
+		got <- b
+	}()
+	w := await(t, "the 64 KiB frame", pendingWrite(dev, rawFrame(t, payload)), 10*time.Second)
+	if w.err != nil {
+		t.Fatalf("write: %v", w.err)
+	}
+	select {
+	case b := <-got:
+		if !bytes.Equal(b, payload) {
+			t.Fatalf("host read %d bytes, not the %d written", len(b), len(payload))
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the host never read the frame")
+	}
+	if _, err := host.Write([]byte("after")); err != nil {
+		t.Fatal(err)
+	}
+	if r := await(t, "the pending read", read, promptly); r.err != nil || string(buf[:r.n]) != "after" {
+		t.Fatalf("read %q, %v", buf[:r.n], r.err)
+	}
+}
+
+// A hundred frames of mixed sizes each way at once, as a busy exec session
+// streams output while the host sends input: every frame arrives, intact and
+// in order, on both sides.
+func TestOverlappedMixedBurstBothWays(t *testing.T) {
+	dev, host := devicePair(t, nil)
+	const frames = 100
+	sizes := make([]int, frames)
+	for i := range sizes {
+		sizes[i] = []int{0, 1, 17, 512, 4095, 4096, 4097, 9000, 20000, 65536}[i%10]
+	}
+	payload := func(dir, i int) []byte {
+		b := make([]byte, sizes[i])
+		for j := range b {
+			b[j] = byte(dir*31 + i + j)
+		}
+		return b
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 4)
+	send := func(w io.Writer, dir int) {
+		defer wg.Done()
+		bw := bufio.NewWriter(w)
+		for i := range frames {
+			if err := hvchannel.WriteFrame(bw, payload(dir, i)); err != nil {
+				errs <- fmt.Errorf("dir %d frame %d: %w", dir, i, err)
+				return
+			}
+			if err := bw.Flush(); err != nil {
+				errs <- fmt.Errorf("dir %d frame %d flush: %w", dir, i, err)
+				return
+			}
+		}
+	}
+	recv := func(r io.Reader, dir int) {
+		defer wg.Done()
+		br := bufio.NewReader(r)
+		for i := range frames {
+			b, err := hvchannel.ReadFrame(br)
+			if err != nil {
+				errs <- fmt.Errorf("dir %d frame %d: %w", dir, i, err)
+				return
+			}
+			if !bytes.Equal(b, payload(dir, i)) {
+				errs <- fmt.Errorf("dir %d frame %d: %d bytes, not the %d sent", dir, i, len(b), sizes[i])
+				return
+			}
+		}
+	}
+	wg.Add(4)
+	go send(dev, 0)
+	go recv(host, 0)
+	go send(host, 1)
+	go recv(dev, 1)
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the burst did not complete")
+	}
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+}
+
+// Every WriteFile is at most maxDeviceWrite, so a large write never asks the
+// driver for more descriptors than a small queue has.
+func TestOverlappedWriteIsChunked(t *testing.T) {
+	dev, host := devicePair(t, nil)
+	var mu sync.Mutex
+	var lens []int
+	stubWriteFile(t, func(h foundation.HANDLE, p []byte, n *uint32, ov *systemio.OVERLAPPED) error {
+		mu.Lock()
+		lens = append(lens, len(p))
+		mu.Unlock()
+		return filesystem.WriteFile(h, p, n, ov)
+	})
+	go func() { _, _ = io.Copy(io.Discard, host) }()
+	total := 3*maxDeviceWrite + 100
+	if n, err := dev.Write(make([]byte, total)); err != nil || n != total {
+		t.Fatalf("write: %d, %v", n, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	sum := 0
+	for _, l := range lens {
+		if l > maxDeviceWrite {
+			t.Fatalf("a WriteFile of %d bytes", l)
+		}
+		sum += l
+	}
+	if sum != total || len(lens) != 4 {
+		t.Fatalf("WriteFile sizes %v", lens)
+	}
+}
+
+// The driver's "no room yet" answers are waited out, not passed up.
+func TestOverlappedWriteRetriesWhileDeviceFull(t *testing.T) {
+	for _, full := range []error{errDeviceCantWait, errDeviceNoRoom} {
+		t.Run(full.Error(), func(t *testing.T) {
+			dev, host := devicePair(t, nil)
+			refusals := 3
+			stubWriteFile(t, func(h foundation.HANDLE, p []byte, n *uint32, ov *systemio.OVERLAPPED) error {
+				if refusals > 0 {
+					refusals--
+					return full
+				}
+				return filesystem.WriteFile(h, p, n, ov)
+			})
+			if n, err := dev.Write([]byte("reply")); err != nil || n != 5 {
+				t.Fatalf("write: %d, %v", n, err)
+			}
+			got := make([]byte, 5)
+			if _, err := io.ReadFull(host, got); err != nil || string(got) != "reply" {
+				t.Fatalf("host read %q, %v", got, err)
+			}
+		})
+	}
+}
+
+// A device that stays full past deviceWriteRetry fails the write, and any
+// other error is not retried at all.
+func TestOverlappedWriteGivesUp(t *testing.T) {
+	dev, _ := devicePair(t, nil)
+	retry := deviceWriteRetry
+	t.Cleanup(func() { deviceWriteRetry = retry })
+	deviceWriteRetry = 50 * time.Millisecond
+	stubWriteFile(t, func(foundation.HANDLE, []byte, *uint32, *systemio.OVERLAPPED) error {
+		return errDeviceCantWait
+	})
+	if _, err := dev.Write([]byte("x")); !errors.Is(err, errDeviceCantWait) {
+		t.Fatalf("write to a device that stays full: %v", err)
+	}
+	calls := 0
+	other := syscall.Errno(foundation.ERROR_GEN_FAILURE)
+	stubWriteFile(t, func(foundation.HANDLE, []byte, *uint32, *systemio.OVERLAPPED) error {
+		calls++
+		return other
+	})
+	if _, err := dev.Write([]byte("x")); !errors.Is(err, other) || calls != 1 {
+		t.Fatalf("write failing otherwise: %v after %d calls", err, calls)
+	}
+}
+
+// shortWriteTimeouts makes a write the host does not take give up quickly.
+func shortWriteTimeouts(t *testing.T) {
+	t.Helper()
+	slow, timeout, cancelWait := deviceWriteSlow, deviceWriteTimeout, deviceCancelWait
+	t.Cleanup(func() {
+		deviceWriteSlow, deviceWriteTimeout, deviceCancelWait = slow, timeout, cancelWait
+	})
+	deviceWriteSlow, deviceWriteTimeout, deviceCancelWait = 100*time.Millisecond, 400*time.Millisecond, time.Second
+}
+
+// A host that stops reading leaves a write pending: it is reported as slow,
+// then cancelled, and fails, rather than holding the writer for good. The
+// device stays usable for a later write once the host drains.
+func TestOverlappedWriteTimesOutWhenHostStopsReading(t *testing.T) {
+	shortWriteTimeouts(t)
+	logs := &logBuffer{}
+	dev, host := devicePair(t, &winio.PipeConfig{InputBufferSize: 512, OutputBufferSize: 512})
+	dev.useLog(slog.New(slog.NewTextHandler(logs, nil)))
+
+	start := time.Now()
+	_, err := dev.Write(make([]byte, 1<<20))
+	if !errors.Is(err, errWriteTimedOut) {
+		t.Fatalf("write to a host that never reads: %v", err)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("the timed-out write took %v", took)
+	}
+	for _, want := range []string{"device write is slow", "cancelling a device write"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("log lacks %q:\n%s", want, logs.String())
+		}
+	}
+	go func() { _, _ = io.Copy(io.Discard, host) }()
+	if _, err := dev.Write([]byte("again")); err != nil {
+		t.Fatalf("write after the host drains: %v", err)
+	}
+}
+
+// A slow write that completes before the timeout is logged and succeeds.
+func TestOverlappedSlowWriteCompletes(t *testing.T) {
+	shortWriteTimeouts(t)
+	deviceWriteTimeout = 5 * time.Second
+	logs := &logBuffer{}
+	dev, host := devicePair(t, &winio.PipeConfig{InputBufferSize: 512, OutputBufferSize: 512})
+	dev.useLog(slog.New(slog.NewTextHandler(logs, nil)))
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		_, _ = io.Copy(io.Discard, host)
+	}()
+	if _, err := dev.Write(make([]byte, 64<<10)); err != nil {
+		t.Fatalf("slow write: %v", err)
+	}
+	if !strings.Contains(logs.String(), "slow device write completed") {
+		t.Fatalf("log lacks the completion:\n%s", logs.String())
+	}
+}
+
+// A cancelled write the driver never completes is abandoned: the write
+// fails, later writes refuse at once, and Close still returns.
+func TestOverlappedWedgedWriteIsAbandoned(t *testing.T) {
+	shortWriteTimeouts(t)
+	dev, _ := devicePair(t, &winio.PipeConfig{InputBufferSize: 512, OutputBufferSize: 512})
+	dev.useLog(quietLog())
+	real := getOverlappedResultEx
+	t.Cleanup(func() { getOverlappedResultEx = real })
+	getOverlappedResultEx = func(foundation.HANDLE, *systemio.OVERLAPPED, *uint32, uint32, bool) error {
+		return errWaitTimeout
+	}
+	if _, err := dev.Write(make([]byte, 1<<20)); !errors.Is(err, errWriteWedged) {
+		t.Fatalf("wedged write: %v", err)
+	}
+	getOverlappedResultEx = real
+	if _, err := dev.Write([]byte("x")); !errors.Is(err, errWriteWedged) {
+		t.Fatalf("write after abandoning one: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- dev.Close() }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close hung after an abandoned write")
+	}
+}
+
+// End to end: the host stops reading, a large send times out, the channel
+// resets, the device is opened again, and the host's hello on the new
+// connection is answered.
+func TestChannelRecoversFromHostThatStopsReading(t *testing.T) {
+	shortWriteTimeouts(t)
+	delay := reopenDelay
+	t.Cleanup(func() { reopenDelay = delay })
+	reopenDelay = 10 * time.Millisecond
+
+	name, hostCh := listenHost(t, &winio.PipeConfig{InputBufferSize: 512, OutputBufferSize: 512})
+	retryBusy(t, func() (*overlappedDevice, error) { return openOverlapped(name) }).Close() //nolint:errcheck
+	acceptHost(t, hostCh)
+
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	logs := &logBuffer{}
+	mux := &Mux{Log: slog.New(slog.NewTextHandler(logs, nil))}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := mux.ConnectHypervisor(ctx, map[string]string{"device": name}, writeKeyFile(t, pub)); err != nil {
+		t.Fatal(err)
+	}
+	acceptHost(t, hostCh) // the first host end, which never reads
+
+	peer, ok := mux.hypervisorPeer().(*HypervisorPeer)
+	if !ok {
+		t.Fatalf("hypervisor peer is %T", mux.hypervisorPeer())
+	}
+	if err := peer.send("weave", "bulk", make([]byte, 1<<20)); err == nil {
+		t.Fatal("a send the host never took succeeded")
+	}
+
+	host := acceptHost(t, hostCh) // opened again
+	hostR, hostW := bufio.NewReader(host), bufio.NewWriter(host)
+	in := mux.Receive(ctx, "weave")
+	send(t, hostW, "weave", hvchannel.PreAuthKind, map[string]string{"id": "h2"})
+	select {
+	case <-in:
+	case <-time.After(5 * time.Second):
+		t.Fatal("hello on the reopened channel was not delivered")
+	}
+	if err := mux.hypervisorPeer().Send(ctx, "weave",
+		hvchannel.PreAuthKind+".result", []byte(`{"id":"h2"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got := readEnvelope(t, hostR); got.Kind != hvchannel.PreAuthKind+".result" {
+		t.Fatalf("read %q", got.Kind)
+	}
+	if !strings.Contains(logs.String(), "the channel is being reset") {
+		t.Fatalf("log lacks the reset:\n%s", logs.String())
+	}
+}
+
+func stubWriteFile(
+	t *testing.T,
+	f func(foundation.HANDLE, []byte, *uint32, *systemio.OVERLAPPED) error,
+) {
+	t.Helper()
+	real := writeFile
+	t.Cleanup(func() { writeFile = real })
+	writeFile = f
+}
+
+func rawFrame(t *testing.T, payload []byte) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	if err := hvchannel.WriteFrame(&b, payload); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
 }
 
 func TestOverlappedCloseUnblocksPendingRead(t *testing.T) {

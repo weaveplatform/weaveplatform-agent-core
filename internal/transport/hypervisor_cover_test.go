@@ -39,12 +39,14 @@ func (b *logBuffer) String() string {
 }
 
 // deadWire replays canned inbound bytes, then fails the stream with readErr;
-// every write fails. closed is signalled when the read loop gives up.
+// every write fails unless writable is set. closed is signalled on the first
+// Close.
 type deadWire struct {
-	r       io.Reader
-	readErr error
-	closed  chan struct{}
-	once    sync.Once
+	r        io.Reader
+	readErr  error
+	writable bool
+	closed   chan struct{}
+	once     sync.Once
 }
 
 func (w *deadWire) Read(p []byte) (int, error) {
@@ -55,7 +57,12 @@ func (w *deadWire) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func (w *deadWire) Write([]byte) (int, error) { return 0, errors.New("wire cut") }
+func (w *deadWire) Write(p []byte) (int, error) {
+	if w.writable {
+		return len(p), nil
+	}
+	return 0, errors.New("wire cut")
+}
 
 func (w *deadWire) Close() error {
 	w.once.Do(func() { close(w.closed) })
@@ -82,8 +89,9 @@ func waitClosed(t *testing.T, w *deadWire) {
 	}
 }
 
-// A reply that cannot be written, and then a stream that fails, are both
-// logged and end with the connection closed rather than a spinning loop.
+// A stream that fails is logged and ends with the connection closed rather
+// than a spinning loop; an unknown or undecodable control frame does not end
+// it.
 func TestReadLoopWireFailures(t *testing.T) {
 	logs := &logBuffer{}
 	log := slog.New(slog.NewTextHandler(logs, nil))
@@ -98,8 +106,9 @@ func TestReadLoopWireFailures(t *testing.T) {
 				Data:   []byte("{"),
 			},
 		),
-		readErr: errors.New("device gone"),
-		closed:  make(chan struct{}),
+		readErr:  errors.New("device gone"),
+		writable: true,
+		closed:   make(chan struct{}),
 	}
 	newHypervisorPeer(
 		context.Background(),
@@ -114,10 +123,60 @@ func TestReadLoopWireFailures(t *testing.T) {
 	waitClosed(t, wire)
 
 	out := logs.String()
-	for _, want := range []string{"sending a control reply", "unknown control frame", "read ended", "device gone"} {
+	for _, want := range []string{"unknown control frame", "read ended", "device gone"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("log lacks %q:\n%s", want, out)
 		}
+	}
+}
+
+// A reply that cannot be written resets the channel: the stream may hold
+// part of the frame, and a writer that has failed fails every later frame,
+// so carrying on would leave a channel that reads and never answers.
+func TestWriteFailureResetsChannel(t *testing.T) {
+	logs := &logBuffer{}
+	log := slog.New(slog.NewTextHandler(logs, nil))
+	// The read side stays open until the reset: only the failed write may
+	// close the wire.
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { pw.Close() })
+	wire := &deadWire{r: pr, readErr: io.EOF, closed: make(chan struct{})}
+	newHypervisorPeer(context.Background(), wire, log,
+		func(string, string, []byte) *hvchannel.DeliveryFailed { return nil },
+		&channelAuth{log: log})
+	go func() {
+		_ = hvchannel.WriteEnvelope(pw,
+			hvchannel.Envelope{Module: hvchannel.ControlModule, Kind: hvchannel.KindAuthBegin})
+	}()
+	waitClosed(t, wire)
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(logs.String(), "sending a control reply") {
+		if time.Now().After(deadline) {
+			t.Fatalf("the failed reply was not logged:\n%s", logs.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if out := logs.String(); !strings.Contains(out, "the channel is being reset") {
+		t.Fatalf("log lacks the reset:\n%s", out)
+	}
+}
+
+// A frame that cannot be encoded costs only itself, not the channel.
+func TestUnencodableFrameKeepsChannel(t *testing.T) {
+	wire := &deadWire{r: strings.NewReader(""), readErr: nil, writable: true,
+		closed: make(chan struct{})}
+	p := newPeer(wire, quietLog(), nil, authenticatedForTest())
+	big := make([]byte, hvchannel.MaxFrameSize)
+	if err := p.Send(context.Background(), "m", "k", big); !errors.Is(err, hvchannel.ErrFrameTooLarge) {
+		t.Fatalf("oversized send = %v, want ErrFrameTooLarge", err)
+	}
+	select {
+	case <-wire.closed:
+		t.Fatal("an oversized frame reset the channel")
+	default:
+	}
+	if err := p.Send(context.Background(), "m", "k", []byte("x")); err != nil {
+		t.Fatalf("send after an oversized frame: %v", err)
 	}
 }
 
@@ -228,5 +287,32 @@ func TestConnectHypervisor(t *testing.T) {
 	); ok ||
 		err == nil {
 		t.Fatalf("unauthenticated send = %v, %v", ok, err)
+	}
+}
+
+// loggingWire is a device that reports on its own I/O.
+type loggingWire struct {
+	*deadWire
+	log *slog.Logger
+}
+
+func (w *loggingWire) useLog(l *slog.Logger) { w.log = l }
+
+// A device that logs is given the channel's logger before any I/O.
+func TestAttachDeviceSharesLogger(t *testing.T) {
+	mux := &Mux{Log: quietLog()}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	wire := &loggingWire{deadWire: &deadWire{
+		r: strings.NewReader(""), readErr: io.EOF, writable: true, closed: make(chan struct{}),
+	}}
+	closed := mux.attachDevice(ctx, wire, authenticatedForTest())
+	if wire.log != mux.Log {
+		t.Fatal("the device was not given the channel's logger")
+	}
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the read loop did not end on EOF")
 	}
 }

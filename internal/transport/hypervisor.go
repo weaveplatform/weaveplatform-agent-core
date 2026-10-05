@@ -107,6 +107,11 @@ func (m *Mux) attachDevice(
 	auth *channelAuth,
 ) <-chan struct{} {
 	closed := make(chan struct{})
+	// A device that reports on its own I/O (the Windows overlapped one) logs
+	// where the channel does.
+	if d, ok := rwc.(interface{ useLog(l *slog.Logger) }); ok {
+		d.useLog(m.Log)
+	}
 	p := newPeer(rwc, m.Log, m.deliver, auth)
 	p.modules = m.Registry
 	p.onAuthenticated = m.flushHypervisor
@@ -232,15 +237,38 @@ func (p *HypervisorPeer) send(module, kind string, data []byte) error {
 	return p.write(hvchannel.Envelope{Module: module, Kind: kind, Data: data})
 }
 
+// write sends one frame. A frame that cannot be encoded costs only itself. A
+// failure on the wire costs the channel: part of the frame may already have
+// gone, so the stream has lost its place, and the buffered writer keeps the
+// error and would fail every later frame while the read loop went on taking
+// requests — a channel that listens and never answers. Closing it ends the
+// read loop, and the channel's owner opens it again (a device) or the host
+// redials (a socket) and authenticates afresh.
 func (p *HypervisorPeer) write(env hvchannel.Envelope) error {
 	kind := env.Kind
+	payload, err := json.Marshal(env)
+	if err != nil {
+		return fmt.Errorf("transport: encoding %q: %w", kind, err)
+	}
+	if len(payload) > hvchannel.MaxFrameSize {
+		return fmt.Errorf(
+			"transport: writing %q: %w: %d",
+			kind,
+			hvchannel.ErrFrameTooLarge,
+			len(payload),
+		)
+	}
 	p.wmu.Lock()
 	defer p.wmu.Unlock()
-	if err := hvchannel.WriteEnvelope(p.w, env); err != nil {
-		return fmt.Errorf("transport: writing %q: %w", kind, err)
+	err = hvchannel.WriteFrame(p.w, payload)
+	if err == nil {
+		err = p.w.Flush()
 	}
-	if err := p.w.Flush(); err != nil {
-		return fmt.Errorf("transport: flushing %q: %w", kind, err)
+	if err != nil {
+		p.log.Error("hypervisor channel: a write failed; the channel is being reset",
+			"kind", kind, "err", err)
+		p.conn.Close() //nolint:errcheck // the write's error is the one that matters
+		return fmt.Errorf("transport: writing %q: %w", kind, err)
 	}
 	return nil
 }
