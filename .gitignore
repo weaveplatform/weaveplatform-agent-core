@@ -2,6 +2,8 @@
 /bin/
 /.bin/
 /dist/
+# The Windows zip's scripts and certificate, staged (and signed) for goreleaser
+/build/
 *.exe
 *.exe~
 *.dll

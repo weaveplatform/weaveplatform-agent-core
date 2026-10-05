@@ -61,13 +61,13 @@ One repository, one Go module, `github.com/weaveplatform/weaveplatform-agent-cor
 | `internal/verify`, `internal/manifestverify` | Binary signatures per OS, and the signed channel manifest |
 | `internal/transport`, `internal/capability` | The host channel (virtio-serial, vsock, HvSocket, Unix socket) and the capability probe |
 | `internal/store`, `internal/identity`, `internal/policy`, `internal/eventbus`, `internal/session` | Encrypted store, device identity, policy delivery, event bus, console sessions |
-| `internal/weaveboot`, `internal/winsvc`, `internal/layout` | Core replacement, the Windows service, the on-disk layout |
+| `internal/weaveboot`, `internal/winsvc`, `internal/certtrust`, `internal/layout` | Core replacement, the Windows service and its installer, the Windows trust in module signatures, the on-disk layout |
 | `internal/core`, `internal/retry`, `internal/wlog`, `internal/werror`, `internal/platform`, `internal/version` | Core's wiring and protocol window; backoff, logging, error conventions, the OS seam, the build version |
 | `internal/protocol` | Core's own implementation of the wire: `handshake`, `ipc`, `hvchannel`, `manifest` |
 | `internal/gen` | Generated from `proto/` by `buf generate`; committed, and CI fails if it drifts |
 | `proto/`, `schema/` | The protocol (`weave/agent/v1`, `weave/control/v1`) and the manifest JSON Schemas |
 | `internal/provision` | The channel trust anchor from a host-supplied provisioning volume, for guests without cloud-init |
-| `packaging/` | The deb (systemd unit and scripts), the macOS package (launchd daemon and scripts), the Windows installer, the apt repository tool, the cloud-init bring-up seed |
+| `packaging/` | The deb (systemd unit and scripts), the macOS package (launchd daemon and scripts), the Windows installer, uninstaller, code-signing certificate and signing script, the apt repository tool, the cloud-init bring-up seed |
 | `test/protocompat` | Core at protocol N accepts a pinned N-1 module and cleanly refuses one outside the window |
 
 ## Building
@@ -87,7 +87,10 @@ release-please keeps a release PR open on `main`; merging it tags `vX.Y.Z`, and 
 goreleaser: per-platform archives of the four binaries, the `weave-agent` `.deb`, and a
 checksum file signed keylessly with cosign; a macOS runner then builds the
 `weave-agent_<version>_darwin_arm64.pkg` installer from the released binaries
-([`docs/macos-package.md`](docs/macos-package.md)). Core ships no modules. See
+([`docs/macos-package.md`](docs/macos-package.md)). The Windows binaries and install scripts
+are Authenticode signed with the weaveplatform code-signing certificate before they are
+archived, and a Windows runner installs the zip, checks every signature and uninstalls it
+again ([`docs/windows-install.md`](docs/windows-install.md)). Core ships no modules. See
 [`docs/development.md`](docs/development.md#releasing).
 
 ## Writing a module

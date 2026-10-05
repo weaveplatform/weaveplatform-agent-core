@@ -57,6 +57,7 @@ func TestValidateRejects(t *testing.T) {
 		"platform arch":   func(m *Manifest) { m.Platforms[0].Arch = "386" },
 		"artifact os":     func(m *Manifest) { m.Artifacts = []Artifact{{OS: "bsd", Arch: "amd64", Digest: dIndex}} },
 		"artifact digest": func(m *Manifest) { m.Artifacts = []Artifact{{OS: "linux", Arch: "amd64", Digest: "sha256:x"}} },
+		"thumbprint":      func(m *Manifest) { m.Signing = &Signing{AuthenticodeThumbprint: "A6:A3"} },
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := base()
@@ -71,6 +72,7 @@ func TestValidateRejects(t *testing.T) {
 	m.Privilege = PrivilegeSystem
 	m.Zone = "C"
 	m.Version = "2.0.0-rc.1"
+	m.Signing = &Signing{AuthenticodeThumbprint: "a6a3936288b9409ed7a3458cf81014a77ab59b51"}
 	if err := m.Validate(); err != nil {
 		t.Fatalf("valid manifest refused: %v", err)
 	}

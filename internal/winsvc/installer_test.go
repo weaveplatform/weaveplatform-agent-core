@@ -322,12 +322,12 @@ func TestChannelKeyPathMatchesTransport(t *testing.T) {
 	}
 }
 
-func TestSameDir(t *testing.T) {
+func TestSamePath(t *testing.T) {
 	d := t.TempDir()
-	if !sameDir(d, d+string(filepath.Separator)+".") {
+	if !samePath(d, d+string(filepath.Separator)+".") {
 		t.Fatal("same dir not recognised")
 	}
-	if sameDir(d, filepath.Join(d, "missing")) || sameDir(filepath.Join(d, "missing"), d) {
+	if samePath(d, filepath.Join(d, "missing")) || samePath(filepath.Join(d, "missing"), d) {
 		t.Fatal("missing dir reported same")
 	}
 }

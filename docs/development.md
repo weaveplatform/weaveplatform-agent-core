@@ -153,9 +153,41 @@ macOS runner then verifies the darwin/arm64 archive against that checksum file, 
 (`.pkg.sigstore.json`) and attaches both ([`macos-package.md`](macos-package.md)). Before 1.0, `feat:`
 bumps the minor version and `fix:` the patch; `ci:`, `docs:` and `chore:` do not release.
 
+**Windows signing.** The goreleaser job signs every windows binary as it is built, and the two
+install scripts before they are archived. The tool is `osslsigncode`, run by
+`packaging/windows/sign.sh` as a goreleaser hook.
+
+- **What a signature is:** Authenticode, SHA-256, with an RFC 3161 timestamp. Three timestamp
+  authorities are tried in turn, each three times.
+- **Signed before archiving:** the zips, the checksum file and its cosign bundle all describe
+  the signed files.
+- **The checks:**
+  - `sign.sh setup` checks that the PFX in `WINDOWS_CODESIGN_PFX` holds the certificate
+    `WINDOWS_CODESIGN_THUMBPRINT` names. That certificate must also be the committed
+    `packaging/windows/weave-codesign.crt` and the `WINDOWS_CODESIGN_CERT` variable.
+  - Every signed file is verified against that certificate alone, for the pinned thumbprint
+    and a verified timestamp.
+- **The secrets** exist only in that job, under `RUNNER_TEMP`, and an `if: always()` step
+  deletes them.
+- **The `windows-install` job** then runs on `windows-latest` and installs the amd64 zip with
+  `install.ps1`.
+  - It requires `Get-AuthenticodeSignature` to call every installed binary and script `Valid`.
+  - It runs core's verifier on the installed `weave-agent.exe`
+    (`TestAuthenticodeAcceptsARealSignature`).
+  - It uninstalls with the signed `uninstall.ps1` under `-ExecutionPolicy AllSigned` and
+    checks that the service, the files and the certificate are gone.
+
+`make package-test-windows` runs `sign.sh` end to end with a throwaway certificate, and CI
+runs it on every pull request.
+
 There is one component, at the repository root, tagged plain `vX.Y.Z`.
 
 Core releases no modules and no SDK. Each module is released and published from
 `weaveplatform-agent-modules`, and promoted through `weaveplatform-release-channels`.
 
 `make snapshot` runs the same goreleaser configuration locally, unsigned, into `dist/`.
+
+Running `release.yml` by hand (`gh workflow run release.yml --ref <branch>`) is a dry run:
+a snapshot built and signed with the real Apple and Windows identities, the macOS package
+notarised, and the Windows zip installed and checked on a Windows runner. The archives and the
+package are uploaded as workflow artifacts. Nothing is published.

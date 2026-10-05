@@ -44,22 +44,42 @@ descriptor.
   `service` modules still use the default.
 
 ### S12 — Authenticode revocation + thumbprint pin
-`internal/verify/authenticode_windows.go`. Revocation is on
-(`WTD_REVOKE_WHOLECHAIN`, cache-only + exclude-root so offline installs
-don't fail-closed on a network CRL fetch), and the leaf is pinned by SHA-1
-thumbprint (`AuthenticodeThumbprint` in the manifest) when provided, falling
-back to the subject display name.
+`internal/verify/authenticode_windows.go`.
 
-**Run on Windows:** `go test ./internal/verify/` — see
-`authenticode_windows_test.go`. It needs a self-signed cert; the file header
-has the PowerShell to mint one. The tests must show:
-1. unsigned binary refused;
-2. self-signed (untrusted-chain) binary refused — the Authenticode analogue
-   of the macOS "anchor apple" fix;
-3. thumbprint mismatch refused when a thumbprint is pinned.
+- **Revocation is on:** `WTD_REVOKE_WHOLECHAIN`, with cache-only retrieval and the root
+  excluded, so an offline install does not fail closed on a network CRL fetch.
+- **The leaf is pinned.** The SHA-1 thumbprint (`authenticode_thumbprint`) is sufficient on
+  its own and preferred. The subject display name (`authenticode_subject`) is the pin only
+  without a thumbprint. Given both, both must match; given neither, the module is refused.
+
+CI runs it on `windows-latest`, elevated (`go test ./internal/verify/`):
+
+- **`TestAuthenticodeAcceptsATrustedSelfSignedModule`**, end to end:
+  - mints a throwaway self-signed code-signing certificate (`New-SelfSignedCertificate`) and
+    signs the nop binary with it;
+  - an untrusted chain is refused;
+  - after `certtrust.Trust` puts the certificate in `LocalMachine\Root` and
+    `TrustedPublisher` (the installer's own code), the binary is accepted under its
+    thumbprint, refused under another, and refused with one byte changed;
+  - after `certtrust.Untrust`, it is refused again.
+  - It uses LocalMachine because adding to CurrentUser\Root raises a modal dialog and hangs a
+    headless runner.
+- **`TestMatchPin`** covers thumbprint only, subject only, both, and neither.
+- **The release workflow** runs `TestAuthenticodeAcceptsARealSignature` on a binary signed
+  with the real weaveplatform certificate, after `install.ps1` trusted it.
+
+What each failure would mean:
+
+- **The self-signed test refused after the trust:** the chain engine does not take a
+  self-signed `CA:FALSE` leaf in Root as an anchor, or revocation checking is failing on it.
+  Every weave-windows-* module would then be refused in a guest.
+- **The real-signature test refused** while `Get-AuthenticodeSignature` says `Valid`:
+  revocation checking on the timestamp authority's chain fails with cache-only retrieval. The
+  fix would be in `DwProvFlags`, not the certificate.
 
 ### WeaveAgent service and the unattended installer
-`internal/winsvc`, `cmd/weaveboot/service.go`, `packaging/windows/install.ps1`;
+`internal/winsvc`, `internal/certtrust`, `cmd/weaveboot/service.go`,
+`packaging/windows/install.ps1` and `uninstall.ps1`;
 operator view in [`windows-install.md`](windows-install.md). weaveboot detects
 that the SCM started it (session 0 and a `services.exe` parent), runs under the
 service control dispatcher, and turns Stop / Shutdown / PreShutdown into the
@@ -92,6 +112,12 @@ re-installs in place, starts it, stops it gracefully and deletes it;
 - `TestWeavebootStopsCoreGracefully` fails only on Windows — the break did not
   reach core (no shared console, or core not in its own group), and every
   service stop is a hard kill again.
+
+The release workflow's `windows-install` job runs the signed zip's `install.ps1` on a
+runner. It checks that the certificate is in both LocalMachine stores, that every installed
+file is `Valid` to `Get-AuthenticodeSignature`, and that the service is running. It then runs
+`uninstall.ps1` under `AllSigned` and checks that the service, the files and the certificate
+are gone.
 
 **Not yet run anywhere:** a full guest install from autounattend media
 (specialize pass) with a real core and modules, and a real system shutdown
@@ -154,8 +180,7 @@ startup directory-permission tightening (`internal/layout/tighten_unix.go`,
 ## Summary for the Windows-host validator
 
 1. `go test ./internal/store/keyprotect/` — DPAPI round-trip + entropy.
-2. `go test ./internal/verify/` — Authenticode (mint a self-signed cert per
-   the file header).
+2. `go test ./internal/verify/` — Authenticode, elevated: CI does this on every PR.
 3. Manual: non-admin cannot open `\\.\pipe\weave-control`; a module still
    reaches its host pipe.
 4. Install from autounattend media per `windows-install.md`; check the service

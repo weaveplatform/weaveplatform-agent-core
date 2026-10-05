@@ -22,7 +22,9 @@ import (
 
 // Refusals from the Windows verifier, each the fixed part of its message.
 var (
-	errNoSubjectPin       = errors.New("pins no authenticode_subject; refusing")
+	errNoPin = errors.New(
+		"pins no authenticode_thumbprint or authenticode_subject; refusing",
+	)
 	errWinVerifyTrust     = errors.New("WinVerifyTrust rejected")
 	errNoProviderData     = errors.New("no provider data from trust state")
 	errNoSigner           = errors.New("no signer in trust chain")
@@ -42,11 +44,12 @@ func newVerifier(_ *slog.Logger) supervise.Verifier {
 
 // authenticodeVerify authenticates a module binary on Windows: a full
 // WinVerifyTrust chain validation (SmartScreen protects nobody here —
-// modules are fetched after install), then the signing certificate's
-// subject pinned against the manifest.
+// modules are fetched after install), then the signing certificate pinned
+// against the manifest (matchPin).
 func authenticodeVerify(path string, m *manifest.Manifest) error {
-	if m.Signing == nil || m.Signing.AuthenticodeSubject == "" {
-		return fmt.Errorf("verify: manifest for %s %w", m.ID, errNoSubjectPin)
+	if m.Signing == nil ||
+		(m.Signing.AuthenticodeSubject == "" && m.Signing.AuthenticodeThumbprint == "") {
+		return fmt.Errorf("verify: manifest for %s %w", m.ID, errNoPin)
 	}
 
 	fileInfo := wintrust.WINTRUST_FILE_INFO{
@@ -90,10 +93,7 @@ func authenticodeVerify(path string, m *manifest.Manifest) error {
 	return verifyErr
 }
 
-// pinLeaf pins the leaf signing certificate against the manifest. It
-// prefers the SHA-1 thumbprint (a stable identity) when the manifest
-// provides one, and otherwise falls back to the subject display name (a CN
-// string, which is not unique — hence the thumbprint is preferred).
+// pinLeaf pins the leaf signing certificate against the manifest.
 func pinLeaf(path string, state foundation.HANDLE, m *manifest.Manifest) error {
 	provData := wintrust.WTHelperProvDataFromStateData(state)
 	if provData == nil {
@@ -111,8 +111,14 @@ func pinLeaf(path string, state foundation.HANDLE, m *manifest.Manifest) error {
 }
 
 // matchPin is pinLeaf's comparison, split from the trust-state walk so it
-// can be tested against a certificate the test mints: a chain WinVerifyTrust
-// accepts cannot be produced on a CI runner without installing a root.
+// can be tested against a certificate the test mints.
+//
+// The SHA-1 thumbprint names exactly one certificate, so on its own it is a
+// sufficient pin, and the preferred one. The subject display name (a CN,
+// which anyone can put in a certificate a trusted root issued them) is a
+// pin only for want of a thumbprint. Given both, both must match: a
+// manifest that states a subject is making a claim, and a claim that does
+// not hold is refused rather than ignored.
 func matchPin(path string, cert *crypt.CERT_CONTEXT, m *manifest.Manifest) error {
 	if want := m.Signing.AuthenticodeThumbprint; want != "" {
 		got, err := certThumbprint(cert)
@@ -123,23 +129,23 @@ func matchPin(path string, cert *crypt.CERT_CONTEXT, m *manifest.Manifest) error
 			return fmt.Errorf("verify: %s leaf thumbprint %s, manifest pins %s: %w",
 				path, got, want, errThumbprintMismatch)
 		}
+	}
+	want := m.Signing.AuthenticodeSubject
+	if want == "" {
 		return nil
 	}
-
-	// Fallback: subject display name.
 	buf := make([]uint16, subjectNameLen)
 	n := crypt.CertGetNameString(cert, crypt.CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, nil,
 		foundation.PWSTR(&buf[0]), subjectNameLen)
 	if n <= 1 {
 		return fmt.Errorf("verify: %s: %w", path, errNoSubjectName)
 	}
-	subject := win32.UTF16ToString(&buf[0])
-	if subject != m.Signing.AuthenticodeSubject {
+	if subject := win32.UTF16ToString(&buf[0]); subject != want {
 		return fmt.Errorf(
 			"verify: %s signed by %q, manifest pins %q: %w",
 			path,
 			subject,
-			m.Signing.AuthenticodeSubject,
+			want,
 			errSubjectMismatch,
 		)
 	}

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/weaveplatform/weaveplatform-agent-core/internal/certtrust"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/winsvc"
 )
 
@@ -66,6 +67,8 @@ type svcEnv struct {
 	keyDest    string
 	restricted []string
 	state      string
+	trusted    []string
+	untrusted  []string
 }
 
 func stubService(t *testing.T) *svcEnv {
@@ -81,9 +84,13 @@ func stubService(t *testing.T) *svcEnv {
 	e.keyDest = filepath.Join(t.TempDir(), "weave", "channel.pub")
 	e.state = filepath.Join(t.TempDir(), "ProgramData", "Weave")
 	origM, origR, origE, origK, origW, origS := newManager, restrictDir, executable, channelKeyDest, serviceWaits, platformState
+	origT, origU := trustCert, untrustCert
 	t.Cleanup(func() {
 		newManager, restrictDir, executable, channelKeyDest, serviceWaits, platformState = origM, origR, origE, origK, origW, origS
+		trustCert, untrustCert = origT, origU
 	})
+	trustCert = func(c *certtrust.Certificate) error { e.trusted = append(e.trusted, c.Thumbprint); return nil }
+	untrustCert = func(th string) error { e.untrusted = append(e.untrusted, th); return nil }
 	platformState = func() string { return e.state }
 	newManager = func() (winsvc.Manager, error) { return e.scm, nil }
 	restrictDir = func(d string) error { e.restricted = append(e.restricted, d); return nil }
@@ -265,5 +272,34 @@ func TestServiceUnsupportedOffWindows(t *testing.T) {
 func TestPlatformStateDefault(t *testing.T) {
 	if platformState() == "" {
 		t.Fatal("no platform state root")
+	}
+}
+
+// --trust-cert trusts the certificate before the service starts, and
+// uninstall --untrust --remove-files takes the trust and the files away.
+func TestServiceTrustAndFullUninstall(t *testing.T) {
+	e := stubService(t)
+	const thumb = "A6A3936288B9409ED7A3458CF81014A77AB59B51"
+	code, out, errOut := svc("install", "-install-dir", e.dst,
+		"-trust-cert", "../../packaging/windows/weave-codesign.crt", "-start")
+	if code != 0 || strings.Join(e.trusted, ",") != thumb {
+		t.Fatalf("install exit %d, trusted %v: %s%s", code, e.trusted, out, errOut)
+	}
+	code, out, errOut = svc("uninstall", "-install-dir", e.dst, "-untrust", "-remove-files")
+	if code != 0 || strings.Join(e.untrusted, ",") != thumb {
+		t.Fatalf("uninstall exit %d, untrusted %v: %s%s", code, e.untrusted, out, errOut)
+	}
+	if _, err := os.Stat(e.dst); !os.IsNotExist(err) {
+		t.Fatalf("install dir left: %v", err)
+	}
+	if code, _, errOut := svc(
+		"install",
+		"-install-dir",
+		e.dst,
+		"-trust-cert",
+		"missing.crt",
+	); code != 1 ||
+		!strings.Contains(errOut, "code-signing certificate") {
+		t.Fatalf("missing certificate: exit %d: %s", code, errOut)
 	}
 }

@@ -5,11 +5,13 @@
 #
 # Zone A throughout: pure Go, CGO_ENABLED=0, every target cross-compiled
 # from one runner. This signs the release archives (cosign, keyless). The
-# darwin binaries are Developer ID signed as each is built, before anything is
-# archived or checksummed (the post hook below, packaging/darwin/sign.sh), so
-# the darwin archives, the checksum file and its cosign bundle all describe
-# the signed binaries. The release workflow runs this on macOS for codesign;
-# a local snapshot with no signing keychain leaves them unsigned.
+# darwin binaries are Developer ID signed and the windows binaries
+# Authenticode signed as each is built, before anything is archived or
+# checksummed (the post hooks below, packaging/darwin/sign.sh and
+# packaging/windows/sign.sh), so the archives, the checksum file and its
+# cosign bundle all describe the signed binaries. The release workflow runs
+# this on macOS for codesign; a local snapshot with no signing keychain and no
+# PFX leaves them unsigned.
 version: 2
 
 project_name: weaveplatform-agent
@@ -17,6 +19,9 @@ project_name: weaveplatform-agent
 before:
   hooks:
     - go mod download
+    # What the Windows zip carries beside the binaries, staged in build/windows
+    # with the scripts Authenticode signed (unsigned in a local snapshot).
+    - sh packaging/windows/sign.sh scripts build/windows
 
 builds:
   - id: weave-agent
@@ -38,6 +43,8 @@ builds:
       post:
         - cmd: sh packaging/darwin/sign.sh binary {{ .Target }} {{ .Path }}
           output: true
+        - cmd: sh packaging/windows/sign.sh binary {{ .Target }} {{ .Path }}
+          output: true
 
   - id: weaveboot
     main: ./cmd/weaveboot
@@ -56,6 +63,8 @@ builds:
       post:
         - cmd: sh packaging/darwin/sign.sh binary {{ .Target }} {{ .Path }}
           output: true
+        - cmd: sh packaging/windows/sign.sh binary {{ .Target }} {{ .Path }}
+          output: true
 
   - id: weavectl
     main: ./cmd/weavectl
@@ -73,6 +82,8 @@ builds:
     hooks:
       post:
         - cmd: sh packaging/darwin/sign.sh binary {{ .Target }} {{ .Path }}
+          output: true
+        - cmd: sh packaging/windows/sign.sh binary {{ .Target }} {{ .Path }}
           output: true
 
   # The channel-manifest signing tool. Ships with core because it IS core's
@@ -94,6 +105,8 @@ builds:
       post:
         - cmd: sh packaging/darwin/sign.sh binary {{ .Target }} {{ .Path }}
           output: true
+        - cmd: sh packaging/windows/sign.sh binary {{ .Target }} {{ .Path }}
+          output: true
 
 archives:
   - id: weaveplatform-agent
@@ -109,11 +122,13 @@ archives:
       - README.md
       - LICENSE
       - spec.md
-      # Windows only: the unattended installer sits beside the binaries,
-      # where it expects them (docs/windows-install.md). The template is
-      # empty for every other platform, which goreleaser logs as "no files
-      # matched" and otherwise ignores, so those archives are unchanged.
-      - src: '{{ if eq .Os "windows" }}packaging/windows/install.ps1{{ end }}'
+      # Windows only: the unattended installer, its uninstaller and the
+      # code-signing certificate the install trusts sit beside the binaries,
+      # where install.ps1 expects them (docs/windows-install.md). The
+      # template is empty for every other platform, which goreleaser logs as
+      # "no files matched" and otherwise ignores, so those archives are
+      # unchanged.
+      - src: '{{ if eq .Os "windows" }}build/windows/*{{ end }}'
         strip_parent: true
 
 # The Debian package. Linux has no exec-time signature construct, so the package
@@ -214,8 +229,12 @@ release:
     ---
 
     Binaries are pure Go (Zone A) and require no runtime dependencies. Each
-    archive carries `weaveboot`, `weave-agent` and `weavectl` for one platform;
-    the Windows zips add `install.ps1`, the unattended installer.
+    archive carries `weaveboot`, `weave-agent`, `weavectl` and `weavemanifest`
+    for one platform; the Windows zips add `install.ps1` (the unattended
+    installer), `uninstall.ps1` and `weave-codesign.crt`, the weaveplatform
+    code-signing certificate the install trusts. The Windows binaries and
+    scripts are Authenticode signed with that certificate (SHA-1 thumbprint
+    `A6A3936288B9409ED7A3458CF81014A77AB59B51`) and RFC 3161 timestamped.
     The darwin binaries are signed with the weaveplatform Developer ID (team
     5GM6DW5337). `weave-agent_{{ .Version }}_darwin_arm64.pkg` (attached a few
     minutes after the rest) is signed and notarised, and installs the agent in

@@ -5,14 +5,29 @@ Unattended install of the Weave platform agent as the WeaveAgent service.
 
 .DESCRIPTION
 Run elevated (Administrator or SYSTEM) from the unpacked release zip, which
-holds weaveboot.exe, weave-agent.exe and weavectl.exe beside this script and,
-optionally, a modules\ tree. The work is done by `weaveboot service install`:
-this wrapper gives autounattend one stable command line, writes a log, and
-exits non-zero on any failure. Re-running it upgrades in place.
+holds weaveboot.exe, weave-agent.exe, weavectl.exe and weavemanifest.exe
+beside this script, with uninstall.ps1, the weaveplatform code-signing
+certificate (weave-codesign.crt) and, optionally, a modules\ tree. The work
+is done by `weaveboot service install`: this wrapper gives autounattend one
+stable command line, writes a log, and exits non-zero on any failure.
+Re-running it upgrades in place.
+
+The certificate is trusted in LocalMachine\Root and
+LocalMachine\TrustedPublisher, so that core accepts Windows modules signed
+with it. That is the install-time, out-of-band trust step: nothing on the
+channel can change it (docs/windows-install.md).
 
 .PARAMETER ChannelKey
 The host's base64 Ed25519 channel public key file, absolute or relative to
 this script. Installed where core looks for it (%ProgramData%\weave\channel.pub).
+
+.PARAMETER TrustCert
+The module code-signing certificate to trust, absolute or relative to this
+script: weave-codesign.crt beside it unless set.
+
+.PARAMETER NoTrustCert
+Trust no certificate. Core then refuses every Authenticode-signed module
+whose certificate the machine does not already trust.
 
 .PARAMETER Environment
 KEY=VALUE pairs for the service environment, passed on to core. Separate
@@ -24,6 +39,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:\weave\install.ps1 -Ch
 [CmdletBinding()]
 param(
     [string]$ChannelKey,
+    [string]$TrustCert = 'weave-codesign.crt',
+    [switch]$NoTrustCert,
     [string[]]$Environment = @(),
     [string]$InstallDir = (Join-Path $env:ProgramFiles 'Weave'),
     [string]$LogFile = (Join-Path $env:ProgramData 'Weave\logs\install.log'),
@@ -59,6 +76,18 @@ if ($ChannelKey) {
         $ChannelKey = Join-Path $PSScriptRoot $ChannelKey
     }
     $arguments += @('-channel-key', $ChannelKey)
+}
+if (-not $NoTrustCert) {
+    if (-not [IO.Path]::IsPathRooted($TrustCert)) {
+        $TrustCert = Join-Path $PSScriptRoot $TrustCert
+    }
+    if (Test-Path -LiteralPath $TrustCert -PathType Leaf) {
+        $arguments += @('-trust-cert', $TrustCert)
+    } elseif ($PSBoundParameters.ContainsKey('TrustCert')) {
+        Stop-WithFailure "code-signing certificate $TrustCert not found"
+    } else {
+        Write-Log "no ${TrustCert}: trusting no code-signing certificate"
+    }
 }
 foreach ($kv in ($Environment -split ';' | Where-Object { $_ })) {
     $arguments += @('-env', $kv)

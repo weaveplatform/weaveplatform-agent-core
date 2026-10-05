@@ -87,6 +87,8 @@ var (
 	addressRe = regexp.MustCompile(`^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)*$`)
 	versionRe = regexp.MustCompile(`^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$`)
 	digestRe  = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+	// thumbRe is an Authenticode SHA-1 thumbprint, as the schema has it.
+	thumbRe = regexp.MustCompile(`^[0-9A-Fa-f]{40}$`)
 )
 
 // Parse unmarshals and validates a manifest document.
@@ -160,6 +162,12 @@ func (m *Manifest) Validate() error {
 		return fmt.Errorf("%w: invalid session %q", ErrInvalidManifest, m.Session)
 	case len(m.Platforms) == 0:
 		return fmt.Errorf("%w: at least one platform required", ErrInvalidManifest)
+	case m.Signing != nil && m.Signing.AuthenticodeThumbprint != "" &&
+		!thumbRe.MatchString(m.Signing.AuthenticodeThumbprint):
+		// Caught here, where the publisher sees it, rather than as a
+		// thumbprint mismatch on every guest.
+		return fmt.Errorf("%w: authenticode_thumbprint %q is not 40 hex digits",
+			ErrInvalidManifest, m.Signing.AuthenticodeThumbprint)
 	}
 	for _, p := range m.Platforms {
 		if err := osArch(p.OS, p.Arch); err != nil {

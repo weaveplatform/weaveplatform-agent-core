@@ -1,4 +1,4 @@
-//go:build linux || darwin
+//go:build linux || darwin || windows
 
 package core
 
@@ -23,8 +23,8 @@ var watchRetry = func() *atomic.Int64 {
 var errWatchRootGone = errors.New("modules directory removed or moved")
 
 // watchModules calls notify for every change the platform watch (inotify on
-// Linux, kqueue on macOS) reports in dir or in any module directory directly
-// under it, until ctx ends. notify is the reload trigger, which debounces: a
+// Linux, kqueue on macOS, ReadDirectoryChangesW on Windows) reports in dir or
+// in any module directory under it, until ctx ends. notify is the reload trigger, which debounces: a
 // package install's burst of events is one pass.
 func watchModules(ctx context.Context, log *slog.Logger, dir string, notify func()) {
 	logged := false

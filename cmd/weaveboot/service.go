@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/weaveplatform/weaveplatform-agent-core/internal/certtrust"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/layout"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/platform"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/winsvc"
@@ -22,14 +23,20 @@ var (
 	channelKeyDest = winsvc.DefaultChannelKeyPath
 	serviceWaits   = winsvc.DefaultWaits
 	platformState  = func() string { return platform.Paths().StateDir }
+	trustCert      = func(c *certtrust.Certificate) error { return certtrust.Trust(certtrust.LocalMachine, c) }
+	untrustCert    = func(thumbprint string) error { return certtrust.Untrust(certtrust.LocalMachine, thumbprint) }
 )
 
 const serviceUsage = `usage: weaveboot service <install|uninstall|start|stop|status> [flags]
 
   install    copy the agent into place, register the WeaveAgent service
              (LocalSystem, automatic start, restart on failure) and,
-             with --start, start it; re-running updates it in place
-  uninstall  stop and remove the service (files are left in place)
+             with --start, start it; with --trust-cert, trust the module
+             code-signing certificate machine-wide; re-running updates it
+             in place
+  uninstall  stop and remove the service; with --remove-files, also core's
+             files, and with --untrust, the certificate the install trusted
+             (kept while a module package remains)
   start      start the service and wait until it is running
   stop       stop the service and wait until it has stopped
   status     print the service state; exit 0 only when running
@@ -64,16 +71,30 @@ func serviceCmd(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	name := fs.String("name", winsvc.DefaultName, "service name")
 	var (
-		installDir, sourceDir, channelKey *string
-		start                             *bool
-		env                               envFlag
+		installDir, sourceDir, channelKey, cert *string
+		start, removeFiles, untrust             *bool
+		env                                     envFlag
 	)
-	if verb == "install" {
+	if verb == "install" || verb == "uninstall" {
 		installDir = fs.String(
 			"install-dir",
 			winsvc.DefaultInstallDir(),
 			"where the binaries and modules tree are installed",
 		)
+	}
+	if verb == "uninstall" {
+		removeFiles = fs.Bool(
+			"remove-files",
+			false,
+			"also remove core's files from the install directory",
+		)
+		untrust = fs.Bool(
+			"untrust",
+			false,
+			"also remove the code-signing certificate the install trusted, unless a module package remains",
+		)
+	}
+	if verb == "install" {
 		sourceDir = fs.String(
 			"source-dir",
 			"",
@@ -83,6 +104,11 @@ func serviceCmd(args []string, stdout, stderr io.Writer) int {
 			"channel-key",
 			"",
 			"file holding the host's base64 Ed25519 channel public key, installed at "+channelKeyDest(),
+		)
+		cert = fs.String(
+			"trust-cert",
+			"",
+			"module code-signing certificate (PEM or DER) to trust in LocalMachine Root and TrustedPublisher",
 		)
 		start = fs.Bool("start", false, "start the service once installed")
 		fs.Var(
@@ -111,9 +137,23 @@ func serviceCmd(args []string, stdout, stderr io.Writer) int {
 
 	switch verb {
 	case "install":
-		err = install(m, *name, *installDir, *sourceDir, *channelKey, *start, env, stdout)
+		err = install(m, installOptions{
+			name: *name, installDir: *installDir, sourceDir: *sourceDir,
+			channelKey: *channelKey, cert: *cert, start: *start, env: env,
+		}, stdout)
 	case "uninstall":
-		err = winsvc.Uninstall(m, *name, serviceWaits)
+		self, _ := executable()
+		err = winsvc.Uninstaller{
+			Manager:     m,
+			Name:        *name,
+			Waits:       serviceWaits,
+			InstallDir:  *installDir,
+			RemoveFiles: *removeFiles,
+			Untrust:     *untrust,
+			UntrustFn:   untrustCert,
+			Self:        self,
+			Log:         stdout,
+		}.Run()
 	case "start":
 		err = winsvc.Start(m, *name, serviceWaits)
 	case "stop":
@@ -142,13 +182,14 @@ func serviceCmd(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func install(
-	m winsvc.Manager,
-	name, installDir, sourceDir, channelKey string,
-	start bool,
-	env []string,
-	out io.Writer,
-) error {
+type installOptions struct {
+	name, installDir, sourceDir, channelKey, cert string
+	start                                         bool
+	env                                           []string
+}
+
+func install(m winsvc.Manager, o installOptions, out io.Writer) error {
+	sourceDir := o.sourceDir
 	if sourceDir == "" {
 		self, err := executable()
 		if err != nil {
@@ -159,18 +200,20 @@ func install(
 	in := winsvc.Installer{
 		Manager: m,
 		Service: winsvc.Config{
-			Name:        name,
+			Name:        o.name,
 			DisplayName: winsvc.DefaultDisplayName,
 			Description: winsvc.DefaultDescription,
-			Env:         env,
+			Env:         o.env,
 		},
 		SourceDir:      sourceDir,
-		InstallDir:     installDir,
-		StateDir:       stateRoot(env),
-		ChannelKey:     channelKey,
+		InstallDir:     o.installDir,
+		StateDir:       stateRoot(o.env),
+		ChannelKey:     o.channelKey,
 		ChannelKeyDest: channelKeyDest(),
 		Restrict:       restrictDir,
-		Start:          start,
+		TrustCert:      o.cert,
+		Trust:          trustCert,
+		Start:          o.start,
 		Waits:          serviceWaits,
 		Log:            out,
 	}

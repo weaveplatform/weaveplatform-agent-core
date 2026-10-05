@@ -138,11 +138,22 @@ darwin-bin:
 package-test-darwin: darwin-bin
 	sh packaging/darwin/package_test.sh $(DARWIN_BIN)
 
-## shellcheck: the macOS package scripts
+## package-test-windows: Authenticode signing (sign.sh) end to end with a throwaway certificate (needs osslsigncode, openssl; reaches a public TSA)
+package-test-windows:
+	sh packaging/windows/sign_test.sh
+
+## ps-check: the Windows install scripts parse as PowerShell (needs pwsh)
+ps-check:
+	@for f in packaging/windows/*.ps1; do \
+		pwsh -NoProfile -Command "\$$e = \$$null; [System.Management.Automation.Language.Parser]::ParseFile('$$f', [ref]\$$null, [ref]\$$e) | Out-Null; if (\$$e) { \$$e | ForEach-Object { \$$_.ToString() }; exit 1 }" || exit 1; \
+		echo "$$f parses"; \
+	done
+
+## shellcheck: the macOS and Windows packaging scripts
 shellcheck:
-	shellcheck -s sh packaging/darwin/*.sh packaging/darwin/scripts/preinstall packaging/darwin/scripts/postinstall
+	shellcheck -s sh packaging/darwin/*.sh packaging/darwin/scripts/preinstall packaging/darwin/scripts/postinstall packaging/windows/*.sh
 
 ## gate: everything CI runs, in order
 gate: vet lint test cover vuln build tidy-check buf-lint gen-check core-independent
 
-.PHONY: help fmt lint vet test cover vuln build tidy-check protoc-plugins buf-lint gen gen-check core-independent fuzz snapshot package-test pkg-darwin darwin-bin package-test-darwin shellcheck gate
+.PHONY: help fmt lint vet test cover vuln build tidy-check protoc-plugins buf-lint gen gen-check core-independent fuzz snapshot package-test pkg-darwin darwin-bin package-test-darwin package-test-windows ps-check shellcheck gate

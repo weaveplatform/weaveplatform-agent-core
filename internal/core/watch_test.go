@@ -1,4 +1,4 @@
-//go:build linux || darwin
+//go:build linux || darwin || windows
 
 package core
 
@@ -39,6 +39,25 @@ func (c *counter) waitAbove(t *testing.T, n int32, what string) {
 			t.Fatalf("no notification for %s", what)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// mkdirEventually makes dir, retrying while it fails. On Windows a removed
+// directory stays "delete pending" — and cannot be made again — until the
+// last handle on it closes, and the watch's handle closes only once the watch
+// has seen the removal.
+func mkdirEventually(t *testing.T, dir string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		err := os.Mkdir(dir, 0o755)
+		if err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
@@ -138,9 +157,7 @@ func TestWatchModulesDirReplaced(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.waitAbove(t, n, "the modules directory removed")
-	if err := os.Mkdir(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	mkdirEventually(t, dir)
 	time.Sleep(100 * time.Millisecond)
 	n = c.settle()
 	writeFile(t, filepath.Join(dir, "m", "x"), "")

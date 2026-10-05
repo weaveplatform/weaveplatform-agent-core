@@ -234,15 +234,15 @@ must not be read as "nothing installed" and stop every module.
 **Four triggers, one pass.** All of them end in the same reconcile:
 
 - **the directory watch** — on the modules directory and each module directory in it,
-  following directories as they come and go: inotify on Linux, kqueue on macOS (below);
+  following directories as they come and go: inotify on Linux, kqueue on macOS and
+  `ReadDirectoryChangesW` on Windows (below);
 - **SIGHUP** to weave-agent — `systemctl reload weave-agent` (`ExecReload`) on Linux and
   `launchctl kill HUP system/run.weaveplatform.agent` on macOS signal weaveboot, the service
   manager's main process, which forwards it to core;
 - **`ControlService.Reload`** — `weavectl reload`, which answers with what the pass did:
   modules added, removed and replaced, and every module still invalid;
 - **the periodic rescan** — `--module-rescan` / `WEAVE_MODULE_RESCAN`, default one minute,
-  `0` to disable: the safety net for a change nothing reported, and for Windows, which has
-  no watch yet.
+  `0` to disable: the safety net for a change nothing reported.
 
 **The macOS watch** (`internal/core/watch_darwin.go`) is kqueue `EVFILT_VNODE`. kqueue watches
 vnodes rather than names, and a directory's event says only that its entries changed, so the
@@ -254,6 +254,28 @@ directory are watched as well, for a write in place, which changes no directory.
 (`versions/<v>/`) are not watched, as on Linux: a lifecycle install flips `current` last, and
 the rescan covers anything else. Each watched path holds one descriptor, opened `O_EVTONLY` so
 it never keeps a volume from unmounting.
+
+**The Windows watch** (`internal/core/watch_windows.go`) is one overlapped
+`ReadDirectoryChangesW` on the modules directory with `bWatchSubtree`. Module directories are
+followed as they come and go with no per-directory bookkeeping, and every event names the
+path that changed.
+
+- **What it ignores.** A path is ignored if any part of it is a staging name: dot-names,
+  `*.new` (the module zip's installer stages each file beside its destination), `~*` and
+  `*.tmp` (Windows Installer and most Windows tools), or `.dpkg-*`. A directory's own
+  "modified" event is ignored too: NTFS moves a directory's last-write time whenever an entry
+  in it changes, and that entry reports its own event.
+- **Overflow.** A buffer overflow (`ERROR_NOTIFY_ENUM_DIR`, or an empty result) counts as a
+  change.
+- **The modules directory itself deleted.** The pending read fails with
+  `ERROR_ACCESS_DENIED`. The watch closes its handle, so the delete-pending directory can go,
+  and it retries every five seconds as on unix. A rename of the modules directory itself is
+  not reported; the rescan covers it.
+- **Depth.** It sees deeper than the other two platforms (`versions\<v>\`), which only costs
+  an extra debounced trigger during a lifecycle install.
+
+Windows has no SIGHUP. `weavectl reload` is the explicit trigger, and agent-modules' module
+zip installer runs it.
 
 Passes are serialised, and the watch and SIGHUP go through a debounce: a trigger waits for
 half a second of quiet (and never more than five seconds in all), so a package's burst of
@@ -484,6 +506,9 @@ platform's own state dir used to relocate the run and log directories under it, 
 The packages add the binaries and a package-owned modules directory, passed to core as
 `--modules-dir`: `/usr/lib/weave/{,modules}` on Linux, `/usr/local/libexec/weave/{,modules}`
 on macOS (`/usr/lib` is SIP-protected there), `%ProgramFiles%\Weave\{,modules}` on Windows.
+On Windows the install directory also holds `uninstall.ps1` and `weave-codesign.crt` (the
+certificate the install trusted), and `uninstall.d\<id>.ps1` for each module package installed
+after core ([`windows-install.md`](windows-install.md)).
 
 With `--state-dir <root>` every row is `<root>/<name>` (`run`, `exec`, `logs`, `staging`,
 `modules`). `layout.Ensure` creates each directory and holds it at exactly that mode on every
@@ -519,6 +544,15 @@ user:
   signature is embedded, so the copy carries it, and checking the file actually exec'd leaves
   no gap between check and launch. The copy goes when the module stops (retried while
   Windows lets go of the image) and otherwise at the next launch or start-up sweep.
+- **Windows trust in module signatures** is installed out of band, with the service. The
+  installer puts the weaveplatform code-signing certificate (self-signed, `CA:FALSE`, code
+  signing only) into `LocalMachine\Root` and `LocalMachine\TrustedPublisher`
+  (`internal/certtrust`), so `WinVerifyTrust` accepts the chain. The manifest's
+  `signing.authenticode_thumbprint` then pins the exact certificate. The thumbprint alone is
+  sufficient. `authenticode_subject` is only a fallback pin when there is no thumbprint, and
+  when both are given both must match. The uninstaller removes the trust when no module
+  package remains ([`windows-install.md`](windows-install.md#trusting-the-code-signing-certificate)).
+  Nothing on the channel can change this trust.
 
 ## Core's internal layout
 
@@ -538,7 +572,8 @@ user:
 | `internal/capability` | the one host probe at startup that gates module launch |
 | `internal/eventbus` | at-most-once in-core pub/sub — the only lateral channel between modules |
 | `internal/weaveboot` | versioned core tree, staged replace, crash-loop revert |
-| `internal/winsvc` | Windows service: SCM dispatcher and stop handling, service registration, unattended install |
+| `internal/winsvc` | Windows service: SCM dispatcher and stop handling, service registration, unattended install and uninstall |
+| `internal/certtrust` | the module code-signing certificate: what the installer will trust, and putting it in (and taking it out of) the machine's Root and TrustedPublisher stores |
 | `internal/controlsock` | ControlService for weavectl and (later) the portal |
 
 ## Policy

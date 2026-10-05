@@ -65,7 +65,12 @@
             "additionalProperties": false,
             "properties": {
               "apple_team_id": { "type": "string" },
-              "authenticode_subject": { "type": "string" }
+              "authenticode_subject": { "type": "string" },
+              "authenticode_thumbprint": {
+                "type": "string",
+                "pattern": "^[0-9A-Fa-f]{40}$",
+                "description": "SHA-1 thumbprint of the Authenticode signing certificate, 40 hex digits in either case. Sufficient on its own, and preferred over authenticode_subject; given both, both must match."
+              }
             }
           },
           "artifacts": { "$ref": "#/$defs/artifacts" }

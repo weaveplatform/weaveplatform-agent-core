@@ -4,7 +4,10 @@ name: release
 # release: the binaries for six platforms, the archives, the weave-agent
 # .deb, a cosign-signed checksum file, and the macOS installer package. The
 # darwin binaries and the package are signed with the weaveplatform Developer
-# ID, and the package is notarised and stapled (packaging/darwin/sign.sh).
+# ID, and the package is notarised and stapled (packaging/darwin/sign.sh). The
+# windows binaries and install scripts are Authenticode signed with the
+# weaveplatform code-signing certificate (packaging/windows/sign.sh), and the
+# Windows zip is then installed, verified and uninstalled on a Windows runner.
 #
 # release-please owns the version, the changelog and the GitHub release
 # itself; this only builds the artifacts and appends them. A failure here
@@ -13,10 +16,11 @@ name: release
 # release-please pushes it with the org App token, not GITHUB_TOKEN.
 #
 # Run by hand (workflow_dispatch) it is a dry run on any branch: a goreleaser
-# snapshot, the darwin binaries signed, the package signed, notarised and
-# stapled, and all of it uploaded as workflow artifacts. Nothing is published
+# snapshot, the darwin and windows binaries signed, the package signed,
+# notarised and stapled, the Windows zip installed and checked on a Windows
+# runner, and all of it uploaded as workflow artifacts. Nothing is published
 # and nothing is cosign-signed. That is how a signing change is proven before
-# it merges: the Apple secrets exist only here.
+# it merges: the Apple and Windows signing secrets exist only here.
 on:
   push:
     tags:
@@ -32,9 +36,10 @@ jobs:
     # Only vX.Y.Z tags release core. A tag with a path component
     # (anything/v1.2.3) is never a core release.
     if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.ref_name, '/') }}
-    # macOS for codesign: goreleaser's post-build hook signs each darwin
-    # binary before it is archived or checksummed. Everything else
-    # cross-compiles here as it would anywhere.
+    # macOS for codesign: goreleaser's post-build hooks sign each darwin
+    # binary (codesign) and each windows binary (osslsigncode) before it is
+    # archived or checksummed. Everything else cross-compiles here as it
+    # would anywhere. This is the only job that holds the signing secrets.
     runs-on: macos-latest
     permissions:
       # Attaching the artifacts to the release.
@@ -47,6 +52,7 @@ jobs:
     env:
       GOWORK: 'off'
       APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      WINDOWS_CODESIGN_THUMBPRINT: ${{ vars.WINDOWS_CODESIGN_THUMBPRINT }}
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -87,8 +93,27 @@ jobs:
           APPLE_DEVELOPER_ID_APP_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_APP_P12_PASSWORD }}
         run: sh packaging/darwin/sign.sh keychain
 
-      # WEAVE_SIGN_REQUIRED: a darwin binary the hook cannot sign fails the
-      # build rather than shipping unsigned.
+      # osslsigncode, and the OpenSSL 3 it links, ahead of the system
+      # LibreSSL for sign.sh's own openssl calls.
+      - name: Install osslsigncode
+        run: |
+          brew install osslsigncode
+          echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
+
+      # The PFX and its password go to a private directory under RUNNER_TEMP
+      # for goreleaser's hooks, after setup has checked the certificate in
+      # it is the pinned one and the one the zip ships. The last step deletes
+      # them, whatever happened.
+      - name: Set up Windows signing
+        env:
+          WINDOWS_CODESIGN_PFX: ${{ secrets.WINDOWS_CODESIGN_PFX }}
+          WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
+          WINDOWS_CODESIGN_CERT: ${{ vars.WINDOWS_CODESIGN_CERT }}
+        run: sh packaging/windows/sign.sh setup
+
+      # WEAVE_SIGN_REQUIRED and WEAVE_WINDOWS_SIGN_REQUIRED: a binary or
+      # script a hook cannot sign fails the build rather than shipping
+      # unsigned.
       - name: Run goreleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
@@ -97,6 +122,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WEAVE_SIGN_REQUIRED: '1'
+          WEAVE_WINDOWS_SIGN_REQUIRED: '1'
 
       - name: Check the archived darwin binaries are signed
         run: |
@@ -106,6 +132,19 @@ jobs:
             mkdir -p "check/$arch"
             tar -xzf "dist/weaveplatform-agent_${ver}_darwin_${arch}.tar.gz" -C "check/$arch"
             sh packaging/darwin/sign.sh verify-binaries "check/$arch"
+          done
+
+      # What was archived, not what was built: every binary and script in
+      # both Windows zips verifies against weave-codesign.crt alone, carries
+      # the pinned thumbprint and a verified RFC 3161 timestamp.
+      - name: Check the archived windows binaries and scripts are signed
+        run: |
+          set -euo pipefail
+          ver=$(jq -r .version dist/metadata.json)
+          for arch in amd64 arm64; do
+            mkdir -p "check/windows-$arch"
+            unzip -q "dist/weaveplatform-agent_${ver}_windows_${arch}.zip" -d "check/windows-$arch"
+            sh packaging/windows/sign.sh verify "check/windows-$arch"/*.exe "check/windows-$arch"/*.ps1
           done
 
       - name: Snapshot version
@@ -124,9 +163,178 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Upload the snapshot windows archives
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: snapshot-windows-archives
+          path: |
+            dist/weaveplatform-agent_*_windows_*.zip
+            dist/weaveplatform-agent_*_checksums.txt
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Remove the signing keychain
         if: always()
         run: sh packaging/darwin/sign.sh cleanup
+
+      - name: Remove the Windows signing key
+        if: always()
+        run: sh packaging/windows/sign.sh cleanup
+
+  # The Windows zip, installed for real on a Windows runner the way a guest
+  # installs it: install.ps1 trusts the shipped certificate, Windows' own
+  # Authenticode check (Get-AuthenticodeSignature) then calls every binary and
+  # script Valid, core's verifier accepts the installed weave-agent.exe under
+  # the pinned thumbprint, PowerShell runs the signed uninstall.ps1 under
+  # AllSigned, and the uninstall takes the service, the files and the trust
+  # away again. No secret reaches this job.
+  windows-install:
+    name: '🪟 Windows install and signature check'
+    needs: [goreleaser]
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    env:
+      GOWORK: 'off'
+      WINDOWS_CODESIGN_THUMBPRINT: ${{ vars.WINDOWS_CODESIGN_THUMBPRINT }}
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - name: Check Out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Install cosign
+        if: github.event_name == 'push'
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Fetch and verify the windows archives
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          ver=${TAG#v}
+          mkdir -p dl
+          gh release download "$TAG" -R "$REPO" -D dl \
+            -p "weaveplatform-agent_${ver}_windows_*.zip" \
+            -p "weaveplatform-agent_${ver}_checksums.txt" \
+            -p "weaveplatform-agent_${ver}_checksums.txt.sigstore.json"
+          cosign verify-blob \
+            --bundle "dl/weaveplatform-agent_${ver}_checksums.txt.sigstore.json" \
+            --certificate-identity-regexp "https://github.com/${REPO}/.*" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "dl/weaveplatform-agent_${ver}_checksums.txt"
+          echo "VERSION=$ver" >> "$GITHUB_ENV"
+
+      - name: Fetch the snapshot windows archives
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: snapshot-windows-archives
+          path: dl
+
+      - name: Check and unpack the archives
+        shell: bash
+        env:
+          SNAPSHOT: ${{ needs.goreleaser.outputs.version }}
+        run: |
+          set -euo pipefail
+          ver=${VERSION:-$SNAPSHOT}
+          (cd dl && sha256sum -c "weaveplatform-agent_${ver}_checksums.txt" --ignore-missing)
+          for arch in amd64 arm64; do
+            unzip -q "dl/weaveplatform-agent_${ver}_windows_${arch}.zip" -d "zip-$arch"
+          done
+
+      # Before the trust exists: each file carries a signature by the pinned
+      # certificate, timestamped, that Windows does not yet trust.
+      - name: Signatures before the install
+        shell: pwsh
+        run: |
+          $want = $env:WINDOWS_CODESIGN_THUMBPRINT.ToUpper()
+          $shipped = New-Object Security.Cryptography.X509Certificates.X509Certificate2 (Resolve-Path zip-amd64\weave-codesign.crt).Path
+          if ($shipped.Thumbprint -ne $want) { throw "weave-codesign.crt is $($shipped.Thumbprint), want $want" }
+          foreach ($f in Get-ChildItem zip-amd64, zip-arm64 -Include *.exe, *.ps1 -Recurse) {
+            $s = Get-AuthenticodeSignature -LiteralPath $f.FullName
+            if (-not $s.SignerCertificate) { throw "$($f.FullName): not signed" }
+            if ($s.SignerCertificate.Thumbprint -ne $want) { throw "$($f.FullName): signed by $($s.SignerCertificate.Thumbprint)" }
+            if (-not $s.TimeStamperCertificate) { throw "$($f.FullName): no timestamp" }
+            "{0,-60} {1} {2} timestamp {3}" -f $f.Name, $s.Status, $s.SignerCertificate.Thumbprint, $s.TimeStamperCertificate.Subject
+          }
+
+      - name: Install
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File zip-amd64\install.ps1
+          if ($LASTEXITCODE -ne 0) { throw "install.ps1 exited $LASTEXITCODE" }
+
+      - name: Trusted, Valid and running
+        shell: pwsh
+        run: |
+          $want = $env:WINDOWS_CODESIGN_THUMBPRINT.ToUpper()
+          foreach ($store in 'Root', 'TrustedPublisher') {
+            if (-not (Test-Path "Cert:\LocalMachine\$store\$want")) { throw "not in LocalMachine\$store" }
+            "trusted in LocalMachine\$store"
+          }
+          $dir = Join-Path $env:ProgramFiles 'Weave'
+          foreach ($f in Get-ChildItem $dir -Include *.exe, *.ps1 -Recurse) {
+            $s = Get-AuthenticodeSignature -LiteralPath $f.FullName
+            if ($s.Status -ne 'Valid' -or $s.SignerCertificate.Thumbprint -ne $want) {
+              throw "$($f.FullName): $($s.Status) $($s.StatusMessage)"
+            }
+            "{0,-60} {1} {2}" -f $f.FullName, $s.Status, $s.SignerCertificate.Thumbprint
+          }
+          $weaveboot = Join-Path $dir 'weaveboot.exe'
+          for ($i = 0; $i -lt 30; $i++) {
+            $state = & $weaveboot service status
+            if ($LASTEXITCODE -eq 0) { "WeaveAgent: $state"; break }
+            Start-Sleep -Seconds 1
+          }
+          if ($LASTEXITCODE -ne 0) { throw "WeaveAgent is $state" }
+
+      # Core's own module verifier (internal/verify/authenticode_windows.go)
+      # on a binary signed by the real certificate, trusted by the installer:
+      # accepted under the pinned thumbprint, refused under another.
+      - name: Core's verifier accepts the signed binary
+        shell: bash
+        run: |
+          WEAVE_SIGNED_BINARY="C:\Program Files\Weave\weave-agent.exe" WEAVE_SIGNED_THUMBPRINT="$WINDOWS_CODESIGN_THUMBPRINT" \
+            go test ./internal/verify/ -run '^TestAuthenticodeAcceptsARealSignature$' -count=1 -v
+
+      - name: Uninstall, under AllSigned
+        shell: pwsh
+        run: |
+          $want = $env:WINDOWS_CODESIGN_THUMBPRINT.ToUpper()
+          $dir = Join-Path $env:ProgramFiles 'Weave'
+          powershell.exe -NoProfile -ExecutionPolicy AllSigned -File (Join-Path $dir 'uninstall.ps1')
+          if ($LASTEXITCODE -ne 0) { throw "uninstall.ps1 exited $LASTEXITCODE" }
+          if (Get-Service WeaveAgent -ErrorAction SilentlyContinue) { throw 'WeaveAgent is still registered' }
+          if (Test-Path $dir) { throw "$dir is still there: $(Get-ChildItem -Recurse $dir)" }
+          foreach ($store in 'Root', 'TrustedPublisher') {
+            if (Test-Path "Cert:\LocalMachine\$store\$want") { throw "still in LocalMachine\$store" }
+          }
+          'uninstalled: service, files and trust removed'
+
+      - name: Install and core logs
+        if: always()
+        shell: pwsh
+        run: |
+          foreach ($log in "$env:ProgramData\Weave\logs\install.log", "$env:ProgramData\Weave\logs\weaveboot.log", "$env:TEMP\weave-uninstall.log") {
+            if (Test-Path $log) { "== $log"; Get-Content $log -Tail 60 }
+          }
 
   # The macOS installer package. pkgbuild exists only on macOS, and goreleaser
   # has no pkg output, so this runs after goreleaser and packages the very
