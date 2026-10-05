@@ -122,8 +122,15 @@ func boot(
 
 	log := wlog.New(out, wlog.LevelFromEnv(), "weaveboot")
 
-	// Everything after -- goes to weave-agent; the state dir always does.
-	agentArgs := append([]string{"--state-dir", lay.StateDir}, fs.Args()...)
+	// Everything after -- goes to weave-agent, and a relocated state dir
+	// with it. Only a relocated one: --state-dir moves the whole layout under
+	// one root, so passing the platform's own StateDir would put core's run
+	// and log directories under it too, and its control socket somewhere
+	// weavectl, which resolves the platform layout, never looks.
+	agentArgs := fs.Args()
+	if layout.Relocated(*stateDir) {
+		agentArgs = append([]string{"--state-dir", lay.StateDir}, agentArgs...)
+	}
 	err := bootRun(ctx, weaveboot.Options{
 		Log:        log,
 		CoreDir:    filepath.Join(lay.StateDir, "core"),

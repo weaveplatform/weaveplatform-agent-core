@@ -57,7 +57,7 @@ func run(argv []string, stdout, stderr io.Writer) int {
 
 	addr := *socket
 	if addr == "" {
-		addr = layout.Resolve("").ControlSocket()
+		addr = defaultSocket()
 	}
 
 	client, conn, err := controlsock.Dial(addr)
@@ -211,4 +211,10 @@ func printReload(out io.Writer, resp *controlv1.ReloadResponse) {
 	if len(resp.GetAdded())+len(resp.GetRemoved())+len(resp.GetReplaced()) == 0 {
 		fmt.Fprintln(out, "no module changes")
 	}
+}
+
+// defaultSocket is the control socket of a core weaveboot started: the
+// platform layout's, or the relocated one when WEAVE_STATE_DIR names a root.
+func defaultSocket() string {
+	return layout.Resolve("").ControlSocket()
 }

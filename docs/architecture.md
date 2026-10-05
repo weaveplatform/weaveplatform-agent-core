@@ -466,9 +466,12 @@ stateDiagram-v2
 
 `internal/layout` resolves every directory core uses. The platform defaults come from
 `internal/platform`; `--state-dir` (or `WEAVE_STATE_DIR`) moves the whole tree under one
-root, which is how weaveboot always starts core — so on a packaged Linux install the run and
-log directories are `/var/lib/weave/run` and `/var/lib/weave/logs`, not the platform's
-`/run/weave` and `/var/log/weave`. Nothing below depends on which of the two it is.
+root. weaveboot passes `--state-dir` to core only when it was itself given one (the flag or
+the environment), so a packaged install runs on the platform layout and core's control
+socket is the one `weavectl` dials with no flags: `/run/weave/control.sock` on Linux,
+`/var/run/weave/control.sock` on macOS, `\\.\pipe\weave-control` on Windows. (Passing the
+platform's own state dir used to relocate the run and log directories under it, and
+`weavectl` without `-socket` found nothing.)
 
 | Directory | Linux | macOS | Windows | unix mode |
 |---|---|---|---|---|
