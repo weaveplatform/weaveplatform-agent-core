@@ -42,10 +42,19 @@ func pipeName(t *testing.T) string {
 		strings.ReplaceAll(t.Name(), "/", "-"), os.Getpid(), time.Now().UnixNano())
 }
 
+// hostBuffers are the stand-in's buffers unless a test chooses its own. A
+// virtio-serial port buffers what the host has not yet read; a go-winio pipe
+// left at its zero config has no buffer at all, so every write would wait for
+// the host to read it.
+const hostBuffers = 64 << 10
+
 // listenHost listens on a fresh pipe and returns its name and a channel that
 // yields each host end as the guest opens it.
 func listenHost(t *testing.T, cfg *winio.PipeConfig) (string, <-chan net.Conn) {
 	t.Helper()
+	if cfg == nil {
+		cfg = &winio.PipeConfig{InputBufferSize: hostBuffers, OutputBufferSize: hostBuffers}
+	}
 	name := pipeName(t)
 	l, err := winio.ListenPipe(name, cfg)
 	if err != nil {
@@ -393,6 +402,33 @@ func TestOverlappedWriteGivesUp(t *testing.T) {
 	}
 }
 
+// onlyThisDevice keeps openDevice to the stand-in: a runner may expose COM2,
+// and a fallback that opens would take the place of a pipe that was briefly
+// busy.
+func onlyThisDevice(t *testing.T) {
+	t.Helper()
+	fallback := windowsHypervisorDevices
+	t.Cleanup(func() { windowsHypervisorDevices = fallback })
+	windowsHypervisorDevices = nil
+}
+
+// retryOpen retries open while the stand-in has no listening instance, which
+// openDevice reports only as nothing openable.
+func retryOpen(t *testing.T, open func() error) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		err := open()
+		if err == nil {
+			return
+		}
+		if !errors.Is(err, errNoOpenableDevice) || time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // shortWriteTimeouts makes a write the host does not take give up quickly.
 func shortWriteTimeouts(t *testing.T) {
 	t.Helper()
@@ -495,9 +531,11 @@ func TestChannelRecoversFromHostThatStopsReading(t *testing.T) {
 	mux := &Mux{Log: slog.New(slog.NewTextHandler(logs, nil))}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	if err := mux.ConnectHypervisor(ctx, map[string]string{"device": name}, writeKeyFile(t, pub)); err != nil {
-		t.Fatal(err)
-	}
+	onlyThisDevice(t)
+	keyPath := writeKeyFile(t, pub)
+	retryOpen(t, func() error {
+		return mux.ConnectHypervisor(ctx, map[string]string{"device": name}, keyPath)
+	})
 	acceptHost(t, hostCh) // the first host end, which never reads
 
 	peer, ok := mux.hypervisorPeer().(*HypervisorPeer)
@@ -654,10 +692,12 @@ func TestHelloIsAnsweredOverAnOverlappedDevice(t *testing.T) {
 	// not carry the pipe's, so wait for the pipe to listen first.
 	retryBusy(t, func() (*overlappedDevice, error) { return openOverlapped(name) }).Close() //nolint:errcheck
 	acceptHost(t, hostCh)
-	rwc, err := openDevice(map[string]string{"device": name})
-	if err != nil {
-		t.Fatal(err)
-	}
+	onlyThisDevice(t)
+	var rwc io.ReadWriteCloser
+	retryOpen(t, func() (err error) {
+		rwc, err = openDevice(map[string]string{"device": name})
+		return err
+	})
 	host := acceptHost(t, hostCh)
 
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
