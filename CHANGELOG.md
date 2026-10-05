@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.7](https://github.com/weaveplatform/weaveplatform-agent-core/compare/v0.9.6...v0.9.7) (2026-10-05)
+
+
+### Bug Fixes
+
+* **packaging:** retry stapling when Apple's ticket service times out ([a5ef846](https://github.com/weaveplatform/weaveplatform-agent-core/commit/a5ef8462f51b9b34f0e9a5e4d9a00338571b24a2))
+* **packaging:** retry stapling when Apple's ticket service times out ([b9b5734](https://github.com/weaveplatform/weaveplatform-agent-core/commit/b9b5734b3170f53a054e642e021fc8da8ae361bb))
+
 ## [0.9.6](https://github.com/weaveplatform/weaveplatform-agent-core/compare/v0.9.5...v0.9.6) (2026-10-05)
 
 
