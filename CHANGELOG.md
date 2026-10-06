@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.11](https://github.com/weaveplatform/weaveplatform-agent-core/compare/v0.9.10...v0.9.11) (2026-10-06)
+
+
+### Bug Fixes
+
+* run degraded when the store cannot be opened, and flow-control inbound frames ([46c3b54](https://github.com/weaveplatform/weaveplatform-agent-core/commit/46c3b5429f74583add77476bc80548491304d13b))
+* run degraded when the store cannot be opened, and flow-control inbound frames ([b3f1ed7](https://github.com/weaveplatform/weaveplatform-agent-core/commit/b3f1ed72dc52ef45ce8477089e1fc2638de3a97a))
+
 ## [0.9.10](https://github.com/weaveplatform/weaveplatform-agent-core/compare/v0.9.9...v0.9.10) (2026-10-06)
 
 
