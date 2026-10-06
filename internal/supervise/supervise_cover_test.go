@@ -247,6 +247,7 @@ func TestLaunchFailures(t *testing.T) {
 		{"flood", `malformed line \"\"`},
 		{"wrong-protocol", "outside window"},
 		{"nobody-home", "init:"},
+		{"die-after-handshake", "module exited (exit status 1; last stderr: grpc server: listener: Access is denied.)"},
 	}
 	for _, c := range cases {
 		t.Run(c.mode, func(t *testing.T) {

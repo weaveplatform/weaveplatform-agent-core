@@ -687,6 +687,48 @@ repaired within 100 ms. (The same drain with blocking reads wedged on the first 
 transfer.) The termios is `cfmakeraw`'s plus `CLOCAL`, with `IXOFF`, `IXANY` and
 `IMAXBEL` cleared. Linux's `/dev/virtio-ports` node is not a tty and is read as before.
 
+**On Windows the port is opened for overlapped I/O** (`FILE_FLAG_OVERLAPPED`,
+`internal/transport/hypervisor_device_windows.go`), and that is a correctness
+requirement. Windows serialises every operation on a handle opened synchronously, which
+is how `os.OpenFile` opens one: a `WriteFile` waits behind the `ReadFile` in flight on the
+same handle, and the read loop always has one in flight. Through v0.9.9 core opened the
+port that way, so each reply left only when the host's next write completed the pending
+read — host traces showed the guest's bytes arriving in the same millisecond as the
+host's next frame — and every `weave.presence.hello` missed its 3 s window on a Windows 11
+guest, which never authenticated. Now each direction owns an `OVERLAPPED` and a
+manual-reset event: the read loop's read and the writer's writes are issued independently
+and each waits in `GetOverlappedResult`, so a read pending forever never holds up a
+write. `Close` cancels everything on the handle (`CancelIoEx`), waits for the cancelled
+operations to complete and only then closes the handle, so the stall watch and the read
+loop can close it from any goroutine; a cancelled operation reports `os.ErrClosed`. The
+far end going away (`ERROR_BROKEN_PIPE`, `ERROR_HANDLE_EOF`) reads as EOF, and any other
+I/O failure — the device being removed — ends the read loop, which reopens the device.
+
+The vioserial driver does not queue a write it has no room for. When the port's out
+virtqueue still holds what the host has not consumed, it fails the write at once with
+`STATUS_CANT_WAIT`. When too few descriptors are free for the buffer, it fails with
+`STATUS_INSUFFICIENT_RESOURCES`. Neither means the channel is broken, so the device writes
+in pieces of at most 4 KiB and retries both answers with backoff for up to ten seconds.
+
+A write the host never takes is bounded too. The driver completes a write only once the
+host has consumed it. A pending write holds the peer's write mutex, and the read loop needs
+that mutex for every reply, so one stuck write would wedge the whole channel. A write still
+pending after 2 s is logged at WARN. After 15 s it is cancelled (`CancelIoEx`) and fails. If
+the driver will not give a cancelled write back, its `OVERLAPPED` is abandoned (kept
+reachable, its event never closed) and the device writes no more.
+
+Any write that still fails resets the channel, on every platform. Part of the frame may
+already have gone, and the peer's buffered writer keeps its first error. Carrying on would
+leave a channel that reads the host's requests and never answers.
+
+The Windows tests drive the device over a named pipe opened the same way: a 64 KiB frame
+behind a pending read, a hundred mixed-size frames each way at once, chunking, the retry,
+a host that stops reading (the write times out, and the channel resets and recovers end
+to end), and an abandoned write. The HvSocket channel is a Winsock socket, whose sends and receives already proceed
+independently, so it needed no change. Not yet exercised: the overlapped device on a real
+vioserial port (the fix is built from the field traces, not yet run against them), and
+`\\.\COM2`, whose default comm timeouts are left as they were.
+
 Core still drops an inbound frame when the addressed module's 64-message queue is full,
 and answers `busy` (PROTOCOL.md); the drain means a burst of those can slow the
 decoder without backing the device up behind it.
