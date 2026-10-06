@@ -134,6 +134,12 @@ func (l Layout) PolicyFile() string {
 	return filepath.Join(l.StateDir, "policy.json")
 }
 
+// ManifestSequenceFile is the plain-file copy of the channel-manifest
+// anti-rollback mark (lifecycle.SequenceFile), which a template seal keeps.
+func (l Layout) ManifestSequenceFile() string {
+	return filepath.Join(l.StateDir, "manifest.sequence")
+}
+
 // ModuleRunDir is the per-module socket directory.
 func (l Layout) ModuleRunDir(id string) string {
 	return filepath.Join(l.RunDir, "modules", id)

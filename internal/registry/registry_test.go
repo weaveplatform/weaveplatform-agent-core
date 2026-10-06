@@ -157,3 +157,35 @@ func TestChangedFields(t *testing.T) {
 		}
 	}
 }
+
+// Core's own condition is reported beside the modules, wakes watchers when it
+// changes and only then, and is handed out as a copy.
+func TestCoreCondition(t *testing.T) {
+	r := New()
+	if c := r.Core(); c.Degraded != "" || c.Unavailable != nil {
+		t.Fatalf("a new registry is degraded: %+v", c)
+	}
+	ch := r.Watch(t.Context())
+	rev, _ := r.List()
+	unavailable := []string{"store", "identity"}
+	r.SetCore(Core{Degraded: "store sealed elsewhere", Unavailable: unavailable})
+	if !signalled(ch) {
+		t.Fatal("a change of condition did not wake the watcher")
+	}
+	if next, _ := r.List(); next <= rev {
+		t.Fatalf("revision %d did not move past %d", next, rev)
+	}
+	unavailable[0] = "mutated"
+	c := r.Core()
+	if c.Degraded != "store sealed elsewhere" || c.Unavailable[0] != "store" {
+		t.Fatalf("Core = %+v", c)
+	}
+	c.Unavailable[1] = "mutated"
+	if r.Core().Unavailable[1] != "identity" {
+		t.Fatal("Core handed out the registry's own slice")
+	}
+	r.SetCore(Core{Degraded: "store sealed elsewhere", Unavailable: []string{"store", "identity"}})
+	if signalled(ch) {
+		t.Fatal("an unchanged condition woke the watcher")
+	}
+}

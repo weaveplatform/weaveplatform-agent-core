@@ -39,6 +39,13 @@ var (
 	ErrKeyLength = errors.New("store: master key has wrong length")
 	// ErrCorrupt: a stored value is too short to carry its nonce.
 	ErrCorrupt = errors.New("store: corrupt value")
+	// ErrUnseal: the platform protector refused the sealed master key — on
+	// Windows, a DPAPI blob sealed on another machine or install.
+	ErrUnseal = errors.New("store: unsealing master key")
+	// ErrUndecryptable: a stored value does not open under this master key,
+	// which is what a store.db kept beside a new or different store.key reads
+	// as.
+	ErrUndecryptable = errors.New("store: value does not decrypt under this master key")
 )
 
 // keyFile is the part of *os.File the atomic key write uses.
@@ -99,7 +106,7 @@ func loadOrCreateKey(path string, protector keyprotect.Protector) ([]byte, error
 	if sealed, err := os.ReadFile(path); err == nil {
 		key, err := protector.Unseal(sealed)
 		if err != nil {
-			return nil, fmt.Errorf("store: unsealing master key: %w", err)
+			return nil, fmt.Errorf("%w: %w", ErrUnseal, err)
 		}
 		if len(key) != 32 {
 			return nil, ErrKeyLength
@@ -162,7 +169,7 @@ func (s *Store) open(module, key string, sealed []byte) ([]byte, error) {
 	}
 	plain, err := s.aead.Open(nil, sealed[:ns], sealed[ns:], aad(module, key))
 	if err != nil {
-		return nil, fmt.Errorf("store: opening %s/%s: %w", module, key, err)
+		return nil, fmt.Errorf("%w: %s/%s: %w", ErrUndecryptable, module, key, err)
 	}
 	return plain, nil
 }

@@ -44,6 +44,11 @@ what only an operator needs (process ids, placement); `ControlService.Modules` h
 read the same [registry](architecture.md#the-module-registry), as does the host channel's
 `modules.list` ([`PROTOCOL.md`](PROTOCOL.md#the-host-channels-control-address)).
 
+While core runs without its store ([degraded](architecture.md#a-store-core-cannot-open-degraded-not-down)),
+`StoreService` and `IdentityService.WhoAmI` answer `UNAVAILABLE`, `TransportService.Send`
+with `queue_offline` fails when there is no host to deliver to, and `RegistryService`
+snapshots carry `core` saying so. Everything else is served as usual.
+
 The handshake that precedes all of this — environment in, one stdout line back, exit 78 for
 clean refusal — is normative in [`PROTOCOL.md`](PROTOCOL.md), with a sequence diagram in
 [`architecture.md`](architecture.md).

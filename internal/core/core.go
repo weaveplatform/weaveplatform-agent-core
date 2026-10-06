@@ -28,7 +28,6 @@ import (
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/provision"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/registry"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/store"
-	"github.com/weaveplatform/weaveplatform-agent-core/internal/store/keyprotect"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/supervise"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/transport"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/version"
@@ -148,11 +147,48 @@ func Run(ctx context.Context, opts Options) error {
 		verifier = refuseUnverified
 	}
 
-	st, err := store.Open(lay.StateDir, keyprotect.New())
-	if err != nil {
-		return fmt.Errorf("opening store: %w", err)
+	// The one table of installed modules: the supervisor writes it; transport
+	// delivery, the host channel, RegistryService and ControlService read it.
+	// It also carries core's own condition, so a degraded start is visible
+	// wherever the modules are.
+	modules := registry.New()
+
+	st, storeErr := openStore(lay.StateDir)
+	if errors.Is(storeErr, store.ErrLocked) {
+		// Another core holds the store: that is a second instance, not a
+		// broken store, and running beside it would mean two owners of the
+		// channel and the modules.
+		return fmt.Errorf("opening store: %w", storeErr)
 	}
-	defer st.Close()
+	var backend hostserv.StoreBackend
+	if storeErr == nil {
+		defer st.Close()
+		backend = st
+	}
+	ident := &identity.Provider{Log: log, Store: backend}
+	if storeErr == nil {
+		// Init takes no context: the identity is created and persisted once,
+		// before anything is served, and must not be half-written by a
+		// cancellation. A store that opens but whose identity does not read
+		// back (a store.db kept beside a new store.key) is as unusable as one
+		// that does not open, and must not have a fresh identity written over
+		// the old one.
+		if err := ident.Init(); err != nil { //nolint:contextcheck // identity.Provider.Init has no context parameter
+			storeErr = err
+		}
+	}
+	policyCache := backend
+	if storeErr != nil {
+		backend = store.Unavailable{Err: storeErr}
+		policyCache = nil
+		ident.Disable(storeErr)
+		cond := registry.Core{
+			Degraded:    degradedReason(lay.StateDir, storeErr),
+			Unavailable: degradedFeatures,
+		}
+		modules.SetCore(cond)
+		reportDegraded(ctx, log, cond.Degraded, storeErr)
+	}
 
 	policyFile := opts.PolicyFile
 	if policyFile == "" {
@@ -162,18 +198,10 @@ func Run(ctx context.Context, opts Options) error {
 		Log:      log,
 		Path:     policyFile,
 		Interval: opts.PolicyInterval,
-		Cache:    st,
+		Cache:    policyCache,
 	}
 	policyMgr.Load(ctx)
 	go policyMgr.Run(ctx)
-
-	ident := &identity.Provider{Log: log, Store: st}
-	// Init takes no context: the identity is created and persisted once,
-	// before anything is served, and must not be half-written by a
-	// cancellation.
-	if err := ident.Init(); err != nil { //nolint:contextcheck // identity.Provider.Init has no context parameter
-		return fmt.Errorf("identity: %w", err)
-	}
 
 	// Before the channel loads its key: a provisioning volume already mounted
 	// becomes the anchor the channel starts with, and one mounted later is
@@ -185,10 +213,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	provisionAnchor(ctx, log, anchor)
 
-	// The one table of installed modules: the supervisor writes it; transport
-	// delivery, the host channel, RegistryService and ControlService read it.
-	modules := registry.New()
-	mux := &transport.Mux{Log: log, Queue: st, Registry: modules}
+	mux := &transport.Mux{Log: log, Queue: backend, Registry: modules}
 	// The host channel is the only peer: whatever drives this machine from
 	// directly outside it. Core owns the single connection; modules address
 	// PEER_HYPERVISOR and never touch the wire. Runs for the core lifetime.
@@ -212,7 +237,7 @@ func Run(ctx context.Context, opts Options) error {
 	services := &hostserv.Services{
 		Log:       log,
 		Bus:       eventbus.New(),
-		Store:     st,
+		Store:     backend,
 		Policy:    policyMgr,
 		Identity:  ident,
 		Transport: mux,
@@ -253,7 +278,11 @@ func Run(ctx context.Context, opts Options) error {
 		Verifier:    verifier,
 		Supervisor:  sup,
 		ManifestURL: opts.ManifestURL,
-		SeqStore:    st,
+		// A degraded core's store refuses every read, so manifests are
+		// refused too: the file mark alone is not enough to accept against,
+		// because the store's copy may be the higher one.
+		SeqStore: backend,
+		SeqFile:  lay.ManifestSequenceFile(),
 	}
 	rootPub, err := manifestRootKey(log, embeddedRootPub, opts.RootPubPath, allowRootPubOverride)
 	if err != nil {
@@ -314,6 +343,7 @@ func Run(ctx context.Context, opts Options) error {
 		Window:     Window,
 		Identity:   ident,
 		StartedAt:  time.Now(),
+		Registry:   modules,
 		Reloader:   rec.reload,
 	}
 	ctlErr := make(chan error, 1)

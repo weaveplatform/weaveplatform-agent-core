@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -57,9 +58,9 @@ type Mux struct {
 	dropped uint64
 
 	subMu sync.Mutex // guards subs
-	// subs maps a module id to its live Receive channels; the hypervisor
+	// subs maps a module id to its live Receive streams; the hypervisor
 	// read loop fans inbound messages out through deliver.
-	subs map[string][]chan *agentv1.TransportMessage
+	subs map[string][]*subscriber
 }
 
 const defaultMaxQueued = 10000
@@ -124,7 +125,12 @@ func (m *Mux) Send(
 		}
 		return false, fmt.Errorf("peer %s unreachable: %w", peer.String(), werror.ErrUnavailable)
 	}
-	m.enqueue(context.WithoutCancel(ctx), module, peer, kind, data)
+	// A message that could not be queued is reported, not swallowed: "not
+	// yet delivered" would promise a delivery that will never happen. A core
+	// running without its store answers every queue_offline send this way.
+	if err := m.enqueue(context.WithoutCancel(ctx), module, peer, kind, data); err != nil {
+		return false, fmt.Errorf("peer %s not reachable and %w", peer.String(), err)
+	}
 	return false, nil
 }
 
@@ -133,12 +139,15 @@ func (m *Mux) Send(
 // read loop routes to that module (via deliver), until ctx ends. Multiple
 // concurrent Receive streams for one module are allowed; each gets a copy.
 func (m *Mux) Receive(ctx context.Context, module string) <-chan *agentv1.TransportMessage {
-	ch := make(chan *agentv1.TransportMessage, inboundBuffer)
+	sub := &subscriber{
+		ch:   make(chan *agentv1.TransportMessage, inboundBuffer),
+		done: make(chan struct{}),
+	}
 	m.subMu.Lock()
 	if m.subs == nil {
-		m.subs = make(map[string][]chan *agentv1.TransportMessage)
+		m.subs = make(map[string][]*subscriber)
 	}
-	m.subs[module] = append(m.subs[module], ch)
+	m.subs[module] = append(m.subs[module], sub)
 	m.subMu.Unlock()
 
 	go func() {
@@ -146,54 +155,113 @@ func (m *Mux) Receive(ctx context.Context, module string) <-chan *agentv1.Transp
 		m.subMu.Lock()
 		subs := m.subs[module]
 		for i, c := range subs {
-			if c == ch {
+			if c == sub {
 				m.subs[module] = append(subs[:i], subs[i+1:]...)
 				break
 			}
 		}
 		m.subMu.Unlock()
-		close(ch)
+		sub.close()
 	}()
-	return ch
+	return sub.ch
 }
 
-// inboundBuffer bounds each subscriber's queue; a consumer slower than this
-// drops messages (logged) rather than stalling the single hypervisor read
-// loop, which must never block.
+// subscriber is one Receive stream.
+type subscriber struct {
+	ch chan *agentv1.TransportMessage
+	// done is closed first when the stream ends, so a delivery waiting for
+	// room gives up at once; mu then keeps that delivery and the close of ch
+	// apart, since a send racing the close would panic the read loop.
+	done   chan struct{}
+	mu     sync.Mutex
+	closed bool
+}
+
+// offer hands msg to the subscriber, waiting up to wait for room.
+func (s *subscriber) offer(msg *agentv1.TransportMessage, wait time.Duration) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
+	select {
+	case s.ch <- msg:
+		return true
+	default:
+	}
+	if wait <= 0 {
+		return false
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case s.ch <- msg:
+		return true
+	case <-s.done:
+		return false
+	case <-timer.C:
+		return false
+	}
+}
+
+func (s *subscriber) close() {
+	close(s.done)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+	close(s.ch)
+}
+
+// inboundBuffer bounds each subscriber's queue.
 const inboundBuffer = 64
 
+// inboundWait is how long the read loop waits for room in a full receiver
+// before answering the host busy.
+//
+// Waiting, not dropping, is the flow control: while the read loop waits it
+// reads nothing, the device or socket fills, and the host's writes block —
+// back-pressure all the way to the sender. A 20 MB exec stdin over Windows
+// virtio-serial used to outrun the module's 64-message queue and lose
+// hundreds of frames to "receiver slow" (the client re-sent them). The wait is
+// bounded because the same loop carries everything else the host sends,
+// control frames included, and a receiver that is not slow but stuck — a
+// module blocked writing output to a host that is itself blocked writing
+// stdin to us — would otherwise hold the whole channel for good. Replies are
+// not starved meanwhile: they are written under the write lock, not by this
+// loop. Shorter than frameStall, and the stall watch is held while a delivery
+// waits, so a wait is never mistaken for a lost byte.
+var inboundWait = 5 * time.Second
+
 // deliver fans an inbound hypervisor message out to every Receive stream for
-// the addressed module. Called from the hypervisor peer's read loop. A slow
-// or absent subscriber does not block the loop: the send is non-blocking and a
-// full/missing channel drops the message with a warning. A message no
+// the addressed module. Called from the hypervisor peer's read loop, which it
+// blocks while a receiver's queue is full, up to inboundWait. A message no
 // receiver took comes back as the reason, for the peer to tell the host.
 func (m *Mux) deliver(module, kind string, data []byte) *hvchannel.DeliveryFailed {
 	msg := &agentv1.TransportMessage{Peer: agentv1.Peer_PEER_HYPERVISOR, Kind: kind, Data: data}
-	// The sends happen under subMu, not after copying the slice out: a
-	// Receive whose context ends closes its channel under the same lock, and
-	// a send racing that close would panic the read loop.
 	m.subMu.Lock()
-	subs := m.subs[module]
-	accepted := false
-	for _, ch := range subs {
-		select {
-		case ch <- msg:
-			accepted = true
-		default:
-			m.Log.Warn("inbound hypervisor receiver slow; message dropped",
-				"module", module, "kind", kind)
-		}
-	}
+	subs := slices.Clone(m.subs[module])
 	m.subMu.Unlock()
-	switch {
-	case accepted:
-		return nil
-	case len(subs) > 0:
-		return &hvchannel.DeliveryFailed{Module: module, Kind: kind, Reason: hvchannel.ReasonBusy}
+	if len(subs) == 0 {
+		m.Log.Warn("inbound hypervisor message for module with no receiver; dropped",
+			"module", module, "kind", kind)
+		return m.undeliverable(module, kind)
 	}
-	m.Log.Warn("inbound hypervisor message for module with no receiver; dropped",
-		"module", module, "kind", kind)
-	return m.undeliverable(module, kind)
+	// One deadline for the frame, not one per receiver: two stuck streams
+	// must not double the time the channel stands still.
+	deadline := time.Now().Add(inboundWait)
+	accepted := false
+	for _, sub := range subs {
+		if sub.offer(msg, time.Until(deadline)) {
+			accepted = true
+			continue
+		}
+		m.Log.Warn("inbound hypervisor receiver stuck; message not delivered",
+			"module", module, "kind", kind, "waited", inboundWait.String())
+	}
+	if accepted {
+		return nil
+	}
+	return &hvchannel.DeliveryFailed{Module: module, Kind: kind, Reason: hvchannel.ReasonBusy}
 }
 
 // undeliverable explains a message for an address nothing is receiving on.
@@ -268,15 +336,15 @@ func (m *Mux) enqueue(
 	peer agentv1.Peer,
 	kind string,
 	data []byte,
-) {
+) error {
 	if m.Queue == nil {
-		return
+		return nil
 	}
 	raw, err := json.Marshal(
 		queuedMessage{Module: module, Peer: int32(peer), Kind: kind, Data: data},
 	)
 	if err != nil {
-		return
+		return fmt.Errorf("the message could not be queued: %w", err)
 	}
 	m.mu.Lock()
 	m.seedNextIDLocked(ctx)
@@ -286,10 +354,11 @@ func (m *Mux) enqueue(
 
 	if err := m.Queue.Put(ctx, queueNamespace, key, raw); err != nil {
 		m.Log.Warn("queueing message failed", "err", err)
-		return
+		return fmt.Errorf("the message could not be queued: %w", err)
 	}
 	m.enforceCap(ctx)
 	m.Log.Debug("message queued offline", "module", module, "kind", kind)
+	return nil
 }
 
 // enforceCap drops the oldest queued messages when over the count cap.

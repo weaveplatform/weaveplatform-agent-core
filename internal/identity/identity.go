@@ -32,10 +32,11 @@ type Provider struct {
 	// Store persists the keypair and any recorded device id, encrypted.
 	Store hostserv.StoreBackend
 
-	mu       sync.Mutex
-	priv     ed25519.PrivateKey
-	deviceID string
-	tenant   string
+	mu          sync.Mutex
+	unavailable error
+	priv        ed25519.PrivateKey
+	deviceID    string
+	tenant      string
 }
 
 // ErrCredentialsUnsupported is Credential's answer: core issues no scoped
@@ -141,6 +142,23 @@ func (p *Provider) Credential(
 	scopes []string,
 ) (string, int64, []string, error) {
 	return "", 0, nil, ErrCredentialsUnsupported
+}
+
+// Disable marks the identity unavailable for err: core could not load it,
+// and serves no identity rather than inventing one that would overwrite the
+// real one once the store is back.
+func (p *Provider) Disable(err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.unavailable = err
+	p.priv, p.deviceID, p.tenant = nil, "", ""
+}
+
+// Unavailable returns why there is no identity, or nil when there is one.
+func (p *Provider) Unavailable() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.unavailable
 }
 
 // Enrolled reports, for the control surface, whether the device has its

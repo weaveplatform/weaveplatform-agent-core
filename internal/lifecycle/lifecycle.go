@@ -23,7 +23,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -81,9 +80,12 @@ type Manager struct {
 	// GateStable is how long the module must stay running to pass the
 	// gate; zero gets 3s.
 	GateStable time.Duration
-	// SeqStore persists the channel-manifest anti-rollback high-water
-	// mark; nil disables the sequence check (local/dev installs).
+	// SeqStore and SeqFile persist the channel-manifest anti-rollback
+	// high-water mark (seqmark.go); with neither set there is no sequence
+	// check (local/dev installs). A SeqStore that fails refuses manifests,
+	// which is how a core running without its store keeps refusing them.
 	SeqStore SeqStore
+	SeqFile  string
 
 	// installMu serializes install/rollback per module id, so two
 	// concurrent control-socket operations can't interleave Rename/current
@@ -479,21 +481,9 @@ func (m *Manager) fetchChannel(ctx context.Context) (*manifest.ChannelManifest, 
 	if ch.Expired(time.Now()) {
 		return nil, fmt.Errorf("%w at %s", errExpired, ch.Expires)
 	}
-	if m.SeqStore != nil {
-		last := m.lastSequence(ctx)
-		if ch.Sequence < last {
-			return nil, fmt.Errorf("%w: sequence %d is older than accepted %d",
-				errSequence, ch.Sequence, last)
-		}
-		if ch.Sequence > last {
-			if err := m.SeqStore.Put(
-				ctx,
-				manifestSeqNamespace,
-				"sequence",
-				[]byte(strconv.FormatUint(ch.Sequence, 10)),
-			); err != nil {
-				m.Log.Warn("persisting manifest sequence failed", "err", err)
-			}
+	if m.SeqStore != nil || m.SeqFile != "" {
+		if err := m.acceptSequence(ctx, ch.Sequence); err != nil {
+			return nil, err
 		}
 	}
 	return ch, nil
@@ -502,18 +492,6 @@ func (m *Manager) fetchChannel(ctx context.Context) (*manifest.ChannelManifest, 
 // manifestSeqNamespace is the core-owned store namespace for the channel
 // manifest anti-rollback high-water mark.
 const manifestSeqNamespace = "core.manifest"
-
-func (m *Manager) lastSequence(ctx context.Context) uint64 {
-	raw, found, err := m.SeqStore.Get(ctx, manifestSeqNamespace, "sequence")
-	if err != nil || !found {
-		return 0
-	}
-	n, err := strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 64)
-	if err != nil {
-		return 0
-	}
-	return n
-}
 
 // download fetches url to a temp file, enforcing digest and size.
 func (m *Manager) download(ctx context.Context, url, digest string, size int64) (string, error) {

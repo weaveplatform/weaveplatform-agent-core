@@ -65,6 +65,11 @@ func (v *registryServer) snapshot() *agentv1.RegistrySnapshot {
 		Revision: rev,
 		Modules:  make([]*agentv1.RegisteredModule, 0, len(mods)),
 	}
+	if c := v.s.Registry.Core(); c.Degraded != "" {
+		out.Core = &agentv1.CoreCondition{
+			Degraded: true, Reason: c.Degraded, Unavailable: c.Unavailable,
+		}
+	}
 	for _, m := range mods {
 		out.Modules = append(out.Modules, &agentv1.RegisteredModule{
 			Id:      m.ID,

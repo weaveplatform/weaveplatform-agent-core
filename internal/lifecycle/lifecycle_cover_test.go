@@ -761,18 +761,18 @@ func TestChannelSequenceAntiRollback(t *testing.T) {
 		}
 	})
 
-	// The high-water mark failing to persist is logged, not fatal: the
-	// manifest itself is genuine and fresh.
+	// An accept that cannot record its sequence is not an accept: the mark
+	// would stay behind, and the replay window with it.
 	t.Run("persist fails", func(t *testing.T) {
 		o := newOrigin(t, art, nil)
 		m := channelManager(t, o)
 		m.SeqStore = &memSeq{putErr: errors.New("disk full")}
-		if _, err := m.fetchChannel(ctx); err != nil {
-			t.Fatal(err)
-		}
+		_, err := m.fetchChannel(ctx)
+		wantErr(t, err, "could not be recorded")
 	})
 
-	t.Run("unreadable mark counts as zero", func(t *testing.T) {
+	// A mark that cannot be read is never taken as 0.
+	t.Run("unreadable mark fails closed", func(t *testing.T) {
 		for _, s := range []*memSeq{
 			{getErr: errors.New("io")},
 			{val: []byte("not a number"), found: true},
@@ -780,11 +780,10 @@ func TestChannelSequenceAntiRollback(t *testing.T) {
 			o := newOrigin(t, art, nil)
 			m := channelManager(t, o)
 			m.SeqStore = s
-			if _, err := m.fetchChannel(ctx); err != nil {
-				t.Fatal(err)
-			}
-			if len(s.putSeen) != 1 || s.putSeen[0] != "5" {
-				t.Fatalf("persisted %q, want [5]", s.putSeen)
+			_, err := m.fetchChannel(ctx)
+			wantErr(t, err, "anti-rollback mark cannot be read")
+			if len(s.putSeen) != 0 {
+				t.Fatalf("persisted %q over an unreadable mark", s.putSeen)
 			}
 		}
 	})

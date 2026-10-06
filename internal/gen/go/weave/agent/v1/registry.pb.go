@@ -105,7 +105,9 @@ type RegistrySnapshot struct {
 	// that sees two snapshots keeps the higher. Restarts when core does.
 	Revision uint64 `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
 	// Sorted by id.
-	Modules       []*RegisteredModule `protobuf:"bytes,2,rep,name=modules,proto3" json:"modules,omitempty"`
+	Modules []*RegisteredModule `protobuf:"bytes,2,rep,name=modules,proto3" json:"modules,omitempty"`
+	// Set while core itself is running degraded; unset while it is whole.
+	Core          *CoreCondition `protobuf:"bytes,3,opt,name=core,proto3" json:"core,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -154,6 +156,79 @@ func (x *RegistrySnapshot) GetModules() []*RegisteredModule {
 	return nil
 }
 
+func (x *RegistrySnapshot) GetCore() *CoreCondition {
+	if x != nil {
+		return x.Core
+	}
+	return nil
+}
+
+// CoreCondition says what core is running without, and why.
+type CoreCondition struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// True while core runs without part of what it normally provides.
+	Degraded bool `protobuf:"varint,1,opt,name=degraded,proto3" json:"degraded,omitempty"`
+	// What is wrong, its likely cause and the operator's fix, in one message.
+	Reason string `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	// The features unavailable meanwhile: "store", "identity",
+	// "policy-cache", "offline-queue", "channel-installs". The list may grow; a
+	// reader treats a name it does not know as unavailable all the same.
+	Unavailable   []string `protobuf:"bytes,3,rep,name=unavailable,proto3" json:"unavailable,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CoreCondition) Reset() {
+	*x = CoreCondition{}
+	mi := &file_weave_agent_v1_registry_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CoreCondition) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CoreCondition) ProtoMessage() {}
+
+func (x *CoreCondition) ProtoReflect() protoreflect.Message {
+	mi := &file_weave_agent_v1_registry_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CoreCondition.ProtoReflect.Descriptor instead.
+func (*CoreCondition) Descriptor() ([]byte, []int) {
+	return file_weave_agent_v1_registry_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *CoreCondition) GetDegraded() bool {
+	if x != nil {
+		return x.Degraded
+	}
+	return false
+}
+
+func (x *CoreCondition) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *CoreCondition) GetUnavailable() []string {
+	if x != nil {
+		return x.Unavailable
+	}
+	return nil
+}
+
 type RegisteredModule struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Id      string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -172,7 +247,7 @@ type RegisteredModule struct {
 
 func (x *RegisteredModule) Reset() {
 	*x = RegisteredModule{}
-	mi := &file_weave_agent_v1_registry_proto_msgTypes[3]
+	mi := &file_weave_agent_v1_registry_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -184,7 +259,7 @@ func (x *RegisteredModule) String() string {
 func (*RegisteredModule) ProtoMessage() {}
 
 func (x *RegisteredModule) ProtoReflect() protoreflect.Message {
-	mi := &file_weave_agent_v1_registry_proto_msgTypes[3]
+	mi := &file_weave_agent_v1_registry_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -197,7 +272,7 @@ func (x *RegisteredModule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisteredModule.ProtoReflect.Descriptor instead.
 func (*RegisteredModule) Descriptor() ([]byte, []int) {
-	return file_weave_agent_v1_registry_proto_rawDescGZIP(), []int{3}
+	return file_weave_agent_v1_registry_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *RegisteredModule) GetId() string {
@@ -241,10 +316,15 @@ const file_weave_agent_v1_registry_proto_rawDesc = "" +
 	"\n" +
 	"\x1dweave/agent/v1/registry.proto\x12\x0eweave.agent.v1\x1a\x1bweave/agent/v1/health.proto\"\x15\n" +
 	"\x13RegistryListRequest\"\x16\n" +
-	"\x14RegistryWatchRequest\"j\n" +
+	"\x14RegistryWatchRequest\"\x9d\x01\n" +
 	"\x10RegistrySnapshot\x12\x1a\n" +
 	"\brevision\x18\x01 \x01(\x04R\brevision\x12:\n" +
-	"\amodules\x18\x02 \x03(\v2 .weave.agent.v1.RegisteredModuleR\amodules\"\x9c\x01\n" +
+	"\amodules\x18\x02 \x03(\v2 .weave.agent.v1.RegisteredModuleR\amodules\x121\n" +
+	"\x04core\x18\x03 \x01(\v2\x1d.weave.agent.v1.CoreConditionR\x04core\"e\n" +
+	"\rCoreCondition\x12\x1a\n" +
+	"\bdegraded\x18\x01 \x01(\bR\bdegraded\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\x12 \n" +
+	"\vunavailable\x18\x03 \x03(\tR\vunavailable\"\x9c\x01\n" +
 	"\x10RegisteredModule\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x18\n" +
@@ -268,26 +348,28 @@ func file_weave_agent_v1_registry_proto_rawDescGZIP() []byte {
 	return file_weave_agent_v1_registry_proto_rawDescData
 }
 
-var file_weave_agent_v1_registry_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_weave_agent_v1_registry_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_weave_agent_v1_registry_proto_goTypes = []any{
 	(*RegistryListRequest)(nil),  // 0: weave.agent.v1.RegistryListRequest
 	(*RegistryWatchRequest)(nil), // 1: weave.agent.v1.RegistryWatchRequest
 	(*RegistrySnapshot)(nil),     // 2: weave.agent.v1.RegistrySnapshot
-	(*RegisteredModule)(nil),     // 3: weave.agent.v1.RegisteredModule
-	(*Health)(nil),               // 4: weave.agent.v1.Health
+	(*CoreCondition)(nil),        // 3: weave.agent.v1.CoreCondition
+	(*RegisteredModule)(nil),     // 4: weave.agent.v1.RegisteredModule
+	(*Health)(nil),               // 5: weave.agent.v1.Health
 }
 var file_weave_agent_v1_registry_proto_depIdxs = []int32{
-	3, // 0: weave.agent.v1.RegistrySnapshot.modules:type_name -> weave.agent.v1.RegisteredModule
-	4, // 1: weave.agent.v1.RegisteredModule.health:type_name -> weave.agent.v1.Health
-	0, // 2: weave.agent.v1.RegistryService.List:input_type -> weave.agent.v1.RegistryListRequest
-	1, // 3: weave.agent.v1.RegistryService.Watch:input_type -> weave.agent.v1.RegistryWatchRequest
-	2, // 4: weave.agent.v1.RegistryService.List:output_type -> weave.agent.v1.RegistrySnapshot
-	2, // 5: weave.agent.v1.RegistryService.Watch:output_type -> weave.agent.v1.RegistrySnapshot
-	4, // [4:6] is the sub-list for method output_type
-	2, // [2:4] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	4, // 0: weave.agent.v1.RegistrySnapshot.modules:type_name -> weave.agent.v1.RegisteredModule
+	3, // 1: weave.agent.v1.RegistrySnapshot.core:type_name -> weave.agent.v1.CoreCondition
+	5, // 2: weave.agent.v1.RegisteredModule.health:type_name -> weave.agent.v1.Health
+	0, // 3: weave.agent.v1.RegistryService.List:input_type -> weave.agent.v1.RegistryListRequest
+	1, // 4: weave.agent.v1.RegistryService.Watch:input_type -> weave.agent.v1.RegistryWatchRequest
+	2, // 5: weave.agent.v1.RegistryService.List:output_type -> weave.agent.v1.RegistrySnapshot
+	2, // 6: weave.agent.v1.RegistryService.Watch:output_type -> weave.agent.v1.RegistrySnapshot
+	5, // [5:7] is the sub-list for method output_type
+	3, // [3:5] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_weave_agent_v1_registry_proto_init() }
@@ -302,7 +384,7 @@ func file_weave_agent_v1_registry_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_weave_agent_v1_registry_proto_rawDesc), len(file_weave_agent_v1_registry_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

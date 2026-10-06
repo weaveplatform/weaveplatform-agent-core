@@ -53,10 +53,7 @@ func TestOpenRefusesAnUnusableMasterKey(t *testing.T) {
 		if _, err := Open(
 			dir,
 			fakeProtector{unsealErr: errInjected},
-		); !errors.Is(
-			err,
-			errInjected,
-		) {
+		); !errors.Is(err, errInjected) || !errors.Is(err, ErrUnseal) {
 			t.Fatalf("Open = %v", err)
 		}
 	})
@@ -83,10 +80,7 @@ func TestOpenRefusesAnUnusableMasterKey(t *testing.T) {
 		if _, err := Open(
 			t.TempDir(),
 			fakeProtector{sealErr: errInjected},
-		); !errors.Is(
-			err,
-			errInjected,
-		) {
+		); !errors.Is(err, errInjected) {
 			t.Fatalf("Open = %v", err)
 		}
 	})

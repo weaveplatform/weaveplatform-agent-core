@@ -341,7 +341,9 @@ func (p *HypervisorPeer) readLoop(ctx context.Context) {
 			p.refuse(env.ID)
 			continue
 		}
+		p.watch.hold()
 		failed := p.deliver(env.Module, env.Kind, env.Data)
+		p.watch.release()
 		// Only an authenticated host is told: which modules a guest has is
 		// not something the pre-auth exemption for hello discloses, so an
 		// unauthenticated hello for a missing module goes unanswered as before.

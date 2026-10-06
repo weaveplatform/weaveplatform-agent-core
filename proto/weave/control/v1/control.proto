@@ -8,6 +8,7 @@ package weave.control.v1;
 
 import "weave/agent/v1/handshake.proto";
 import "weave/agent/v1/health.proto";
+import "weave/agent/v1/registry.proto";
 import "weave/agent/v1/ui.proto";
 
 service ControlService {
@@ -36,6 +37,9 @@ message StatusResponse {
   bool enrolled = 4;
   // Seconds since core started.
   uint64 uptime_seconds = 5;
+  // Set while core is running degraded (its store cannot be opened, for
+  // one); unset while it is whole.
+  weave.agent.v1.CoreCondition core = 6;
 }
 
 message ModulesRequest {}
