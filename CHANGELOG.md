@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.9.10](https://github.com/weaveplatform/weaveplatform-agent-core/compare/v0.9.9...v0.9.10) (2026-10-06)
+
+
+### Bug Fixes
+
+* keep the Windows channel answering when the host is slow to drain ([ef4c8be](https://github.com/weaveplatform/weaveplatform-agent-core/commit/ef4c8bec11a2cd304ebbf8fc7bbdfaa6f138fc25))
+* open the Windows channel device for overlapped I/O ([7cc1802](https://github.com/weaveplatform/weaveplatform-agent-core/commit/7cc1802be6ece4c35687bb78066d4c6451118625))
+* report a module that exits after its handshake line ([4b05826](https://github.com/weaveplatform/weaveplatform-agent-core/commit/4b058267f803eb0fbbfe85e8f9345151e12cb746))
+* Windows guest channel I/O and console-session modules ([188531f](https://github.com/weaveplatform/weaveplatform-agent-core/commit/188531f9865ce0b8b50559f4eeb9ecbc7ecc706d))
+
 ## [0.9.9](https://github.com/weaveplatform/weaveplatform-agent-core/compare/v0.9.8...v0.9.9) (2026-10-05)
 
 
