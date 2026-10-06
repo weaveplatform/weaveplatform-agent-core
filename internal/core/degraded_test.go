@@ -138,6 +138,7 @@ func TestRunDegradedWhenTheStoreDoesNotUnseal(t *testing.T) {
 	c := st.GetCore()
 	if !c.GetDegraded() || st.GetDeviceId() != "" || st.GetEnrolled() ||
 		!strings.Contains(c.GetReason(), "weave seal") ||
+		!strings.Contains(c.GetReason(), "delete store.key and store.db from "+dir) ||
 		strings.Join(c.GetUnavailable(), ",") != strings.Join(degradedFeatures, ",") {
 		t.Fatalf("Status = %v", st)
 	}
@@ -160,7 +161,9 @@ func TestRunDegradedWhenTheStoreDoesNotUnseal(t *testing.T) {
 	for _, want := range []string{
 		"level=ERROR",
 		"different machine or user identity",
-		"delete store.key and store.db from " + dir,
+		// The path itself is checked in Status: the text handler escapes a
+		// Windows path's backslashes in the log.
+		"delete store.key and store.db from ",
 		"keep manifest.sequence",
 		"DPAPI: the data is invalid",
 	} {
