@@ -29,6 +29,20 @@ message RegistrySnapshot {
   uint64 revision = 1;
   // Sorted by id.
   repeated RegisteredModule modules = 2;
+  // Set while core itself is running degraded; unset while it is whole.
+  CoreCondition core = 3;
+}
+
+// CoreCondition says what core is running without, and why.
+message CoreCondition {
+  // True while core runs without part of what it normally provides.
+  bool degraded = 1;
+  // What is wrong, its likely cause and the operator's fix, in one message.
+  string reason = 2;
+  // The features unavailable meanwhile: "store", "identity",
+  // "policy-cache", "offline-queue", "channel-installs". The list may grow; a
+  // reader treats a name it does not know as unavailable all the same.
+  repeated string unavailable = 3;
 }
 
 message RegisteredModule {

@@ -71,6 +71,9 @@ type StatusResponse struct {
 	Enrolled bool `protobuf:"varint,4,opt,name=enrolled,proto3" json:"enrolled,omitempty"`
 	// Seconds since core started.
 	UptimeSeconds uint64 `protobuf:"varint,5,opt,name=uptime_seconds,json=uptimeSeconds,proto3" json:"uptime_seconds,omitempty"`
+	// Set while core is running degraded (its store cannot be opened, for
+	// one); unset while it is whole.
+	Core          *v1.CoreCondition `protobuf:"bytes,6,opt,name=core,proto3" json:"core,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -138,6 +141,13 @@ func (x *StatusResponse) GetUptimeSeconds() uint64 {
 		return x.UptimeSeconds
 	}
 	return 0
+}
+
+func (x *StatusResponse) GetCore() *v1.CoreCondition {
+	if x != nil {
+		return x.Core
+	}
+	return nil
 }
 
 type ModulesRequest struct {
@@ -940,14 +950,15 @@ var File_weave_control_v1_control_proto protoreflect.FileDescriptor
 
 const file_weave_control_v1_control_proto_rawDesc = "" +
 	"\n" +
-	"\x1eweave/control/v1/control.proto\x12\x10weave.control.v1\x1a\x1eweave/agent/v1/handshake.proto\x1a\x1bweave/agent/v1/health.proto\x1a\x17weave/agent/v1/ui.proto\"\x0f\n" +
-	"\rStatusRequest\"\xce\x01\n" +
+	"\x1eweave/control/v1/control.proto\x12\x10weave.control.v1\x1a\x1eweave/agent/v1/handshake.proto\x1a\x1bweave/agent/v1/health.proto\x1a\x1dweave/agent/v1/registry.proto\x1a\x17weave/agent/v1/ui.proto\"\x0f\n" +
+	"\rStatusRequest\"\x81\x02\n" +
 	"\x0eStatusResponse\x12!\n" +
 	"\fcore_version\x18\x01 \x01(\tR\vcoreVersion\x129\n" +
 	"\bprotocol\x18\x02 \x01(\v2\x1d.weave.agent.v1.ProtocolRangeR\bprotocol\x12\x1b\n" +
 	"\tdevice_id\x18\x03 \x01(\tR\bdeviceId\x12\x1a\n" +
 	"\benrolled\x18\x04 \x01(\bR\benrolled\x12%\n" +
-	"\x0euptime_seconds\x18\x05 \x01(\x04R\ruptimeSeconds\"\x10\n" +
+	"\x0euptime_seconds\x18\x05 \x01(\x04R\ruptimeSeconds\x121\n" +
+	"\x04core\x18\x06 \x01(\v2\x1d.weave.agent.v1.CoreConditionR\x04core\"\x10\n" +
 	"\x0eModulesRequest\"\xfd\x01\n" +
 	"\fModuleStatus\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
@@ -1036,35 +1047,37 @@ var file_weave_control_v1_control_proto_goTypes = []any{
 	(*LogsRequest)(nil),      // 15: weave.control.v1.LogsRequest
 	(*LogLine)(nil),          // 16: weave.control.v1.LogLine
 	(*v1.ProtocolRange)(nil), // 17: weave.agent.v1.ProtocolRange
-	(*v1.Health)(nil),        // 18: weave.agent.v1.Health
-	(*v1.Surface)(nil),       // 19: weave.agent.v1.Surface
+	(*v1.CoreCondition)(nil), // 18: weave.agent.v1.CoreCondition
+	(*v1.Health)(nil),        // 19: weave.agent.v1.Health
+	(*v1.Surface)(nil),       // 20: weave.agent.v1.Surface
 }
 var file_weave_control_v1_control_proto_depIdxs = []int32{
 	17, // 0: weave.control.v1.StatusResponse.protocol:type_name -> weave.agent.v1.ProtocolRange
-	18, // 1: weave.control.v1.ModuleStatus.health:type_name -> weave.agent.v1.Health
-	3,  // 2: weave.control.v1.ModulesResponse.modules:type_name -> weave.control.v1.ModuleStatus
-	19, // 3: weave.control.v1.ModuleSurfaces.surfaces:type_name -> weave.agent.v1.Surface
-	6,  // 4: weave.control.v1.SurfacesResponse.modules:type_name -> weave.control.v1.ModuleSurfaces
-	14, // 5: weave.control.v1.ReloadResponse.invalid:type_name -> weave.control.v1.InvalidModule
-	0,  // 6: weave.control.v1.ControlService.Status:input_type -> weave.control.v1.StatusRequest
-	2,  // 7: weave.control.v1.ControlService.Modules:input_type -> weave.control.v1.ModulesRequest
-	5,  // 8: weave.control.v1.ControlService.Surfaces:input_type -> weave.control.v1.SurfacesRequest
-	8,  // 9: weave.control.v1.ControlService.Install:input_type -> weave.control.v1.InstallRequest
-	10, // 10: weave.control.v1.ControlService.Rollback:input_type -> weave.control.v1.RollbackRequest
-	12, // 11: weave.control.v1.ControlService.Reload:input_type -> weave.control.v1.ReloadRequest
-	15, // 12: weave.control.v1.ControlService.Logs:input_type -> weave.control.v1.LogsRequest
-	1,  // 13: weave.control.v1.ControlService.Status:output_type -> weave.control.v1.StatusResponse
-	4,  // 14: weave.control.v1.ControlService.Modules:output_type -> weave.control.v1.ModulesResponse
-	7,  // 15: weave.control.v1.ControlService.Surfaces:output_type -> weave.control.v1.SurfacesResponse
-	9,  // 16: weave.control.v1.ControlService.Install:output_type -> weave.control.v1.InstallResponse
-	11, // 17: weave.control.v1.ControlService.Rollback:output_type -> weave.control.v1.RollbackResponse
-	13, // 18: weave.control.v1.ControlService.Reload:output_type -> weave.control.v1.ReloadResponse
-	16, // 19: weave.control.v1.ControlService.Logs:output_type -> weave.control.v1.LogLine
-	13, // [13:20] is the sub-list for method output_type
-	6,  // [6:13] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	18, // 1: weave.control.v1.StatusResponse.core:type_name -> weave.agent.v1.CoreCondition
+	19, // 2: weave.control.v1.ModuleStatus.health:type_name -> weave.agent.v1.Health
+	3,  // 3: weave.control.v1.ModulesResponse.modules:type_name -> weave.control.v1.ModuleStatus
+	20, // 4: weave.control.v1.ModuleSurfaces.surfaces:type_name -> weave.agent.v1.Surface
+	6,  // 5: weave.control.v1.SurfacesResponse.modules:type_name -> weave.control.v1.ModuleSurfaces
+	14, // 6: weave.control.v1.ReloadResponse.invalid:type_name -> weave.control.v1.InvalidModule
+	0,  // 7: weave.control.v1.ControlService.Status:input_type -> weave.control.v1.StatusRequest
+	2,  // 8: weave.control.v1.ControlService.Modules:input_type -> weave.control.v1.ModulesRequest
+	5,  // 9: weave.control.v1.ControlService.Surfaces:input_type -> weave.control.v1.SurfacesRequest
+	8,  // 10: weave.control.v1.ControlService.Install:input_type -> weave.control.v1.InstallRequest
+	10, // 11: weave.control.v1.ControlService.Rollback:input_type -> weave.control.v1.RollbackRequest
+	12, // 12: weave.control.v1.ControlService.Reload:input_type -> weave.control.v1.ReloadRequest
+	15, // 13: weave.control.v1.ControlService.Logs:input_type -> weave.control.v1.LogsRequest
+	1,  // 14: weave.control.v1.ControlService.Status:output_type -> weave.control.v1.StatusResponse
+	4,  // 15: weave.control.v1.ControlService.Modules:output_type -> weave.control.v1.ModulesResponse
+	7,  // 16: weave.control.v1.ControlService.Surfaces:output_type -> weave.control.v1.SurfacesResponse
+	9,  // 17: weave.control.v1.ControlService.Install:output_type -> weave.control.v1.InstallResponse
+	11, // 18: weave.control.v1.ControlService.Rollback:output_type -> weave.control.v1.RollbackResponse
+	13, // 19: weave.control.v1.ControlService.Reload:output_type -> weave.control.v1.ReloadResponse
+	16, // 20: weave.control.v1.ControlService.Logs:output_type -> weave.control.v1.LogLine
+	14, // [14:21] is the sub-list for method output_type
+	7,  // [7:14] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_weave_control_v1_control_proto_init() }

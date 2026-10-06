@@ -124,3 +124,25 @@ func TestRegistryWatchEnds(t *testing.T) {
 		t.Fatal("Watch did not end with its context")
 	}
 }
+
+// A degraded core is part of what a module sees in the registry.
+func TestRegistryCoreCondition(t *testing.T) {
+	reg := registry.New()
+	cli := registryClient(t, reg)
+	snap, err := cli.List(withToken("tok"), &agentv1.RegistryListRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.GetCore() != nil {
+		t.Fatalf("a whole core reported %v", snap.GetCore())
+	}
+	reg.SetCore(registry.Core{Degraded: "no store", Unavailable: []string{"store"}})
+	snap, err = cli.List(withToken("tok"), &agentv1.RegistryListRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := snap.GetCore()
+	if !c.GetDegraded() || c.GetReason() != "no store" || len(c.GetUnavailable()) != 1 {
+		t.Fatalf("core = %v", c)
+	}
+}

@@ -135,6 +135,7 @@ func TestDeliveryFailedNotRunningCarriesTheState(t *testing.T) {
 }
 
 func TestDeliveryFailedBusy(t *testing.T) {
+	setInboundWait(t, 50*time.Millisecond)
 	g := newRegistryGuest(t)
 	g.reg.Set(
 		registry.Module{
@@ -315,5 +316,27 @@ func TestUndeliverableWithoutRegistry(t *testing.T) {
 	m := &Mux{Log: slog.New(slog.DiscardHandler)}
 	if f := m.deliver("anything", "k", nil); f == nil || f.Reason != hvchannel.ReasonNotInstalled {
 		t.Fatalf("got %+v", f)
+	}
+}
+
+// A degraded core says so in the snapshot a host reads; a whole one carries no
+// core field at all, so the shape hosts already decode is unchanged.
+func TestSnapshotCarriesCoreCondition(t *testing.T) {
+	reg := registry.New()
+	raw, err := json.Marshal(snapshot(reg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"core"`) {
+		t.Fatalf("a whole core reported a condition: %s", raw)
+	}
+	reg.SetCore(registry.Core{Degraded: "store sealed elsewhere"})
+	raw, err = json.Marshal(snapshot(reg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw),
+		`"core":{"degraded":true,"reason":"store sealed elsewhere","unavailable":[]}`) {
+		t.Fatalf("got %s", raw)
 	}
 }

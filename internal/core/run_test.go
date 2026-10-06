@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -20,12 +21,10 @@ import (
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/capability"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/controlsock"
 	controlv1 "github.com/weaveplatform/weaveplatform-agent-core/internal/gen/go/weave/control/v1"
-	"github.com/weaveplatform/weaveplatform-agent-core/internal/identity"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/layout"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/protocol/manifest"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/provision"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/store"
-	"github.com/weaveplatform/weaveplatform-agent-core/internal/store/keyprotect"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/supervise"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/transport"
 )
@@ -357,38 +356,15 @@ func TestRunStartupFailures(t *testing.T) {
 		}
 	})
 
-	t.Run("store", func(t *testing.T) {
+	// A second core holding the store is not a broken store: Run fails as
+	// before rather than running beside it degraded.
+	t.Run("store locked", func(t *testing.T) {
 		isolate(t, baseCaps())
-		dir := stateDir(t)
-		if err := os.MkdirAll(filepath.Join(dir, "store.key"), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		err := Run(context.Background(), Options{StateDir: dir, Log: quiet})
-		if err == nil || !strings.Contains(err.Error(), "opening store") {
-			t.Fatalf("Run = %v", err)
-		}
-	})
-
-	// Identity state sealed under a master key that is then lost cannot be
-	// read back; core must not carry on with a fresh identity silently
-	// overwriting the old one.
-	t.Run("identity", func(t *testing.T) {
-		isolate(t, baseCaps())
-		dir := stateDir(t)
-		st, err := store.Open(dir, keyprotect.New())
-		if err != nil {
-			t.Fatal(err)
-		}
-		p := &identity.Provider{Log: quiet, Store: st}
-		if err := p.Init(); err != nil {
-			t.Fatal(err)
-		}
-		st.Close()
-		if err := os.Remove(filepath.Join(dir, "store.key")); err != nil {
-			t.Fatal(err)
-		}
-		err = Run(context.Background(), Options{StateDir: dir, Log: quiet})
-		if err == nil || !strings.Contains(err.Error(), "identity") {
+		orig := openStore
+		openStore = func(string) (*store.Store, error) { return nil, store.ErrLocked }
+		t.Cleanup(func() { openStore = orig })
+		err := Run(context.Background(), Options{StateDir: stateDir(t), Log: quiet})
+		if !errors.Is(err, store.ErrLocked) || !strings.Contains(err.Error(), "opening store") {
 			t.Fatalf("Run = %v", err)
 		}
 	})

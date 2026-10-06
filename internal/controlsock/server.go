@@ -20,6 +20,7 @@ import (
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/lifecycle"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/protocol/handshake"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/protocol/ipc"
+	"github.com/weaveplatform/weaveplatform-agent-core/internal/registry"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/supervise"
 	"github.com/weaveplatform/weaveplatform-agent-core/internal/version"
 )
@@ -38,6 +39,8 @@ type Server struct {
 		Enrolled() bool
 	}
 	StartedAt time.Time
+	// Registry reports core's own condition in Status; nil reports none.
+	Registry *registry.Registry
 	// Reloader rereads the modules directory and applies what changed; nil
 	// answers Reload as unimplemented.
 	Reloader func(context.Context) (*controlv1.ReloadResponse, error)
@@ -73,13 +76,21 @@ func (s *Server) Status(
 	_ *controlv1.StatusRequest,
 ) (*controlv1.StatusResponse, error) {
 	deviceID, _, _ := s.Identity.WhoAmI(ctx)
-	return &controlv1.StatusResponse{
+	resp := &controlv1.StatusResponse{
 		CoreVersion:   version.Version,
 		Protocol:      &agentv1.ProtocolRange{Min: s.Window.Min, Max: s.Window.Max},
 		DeviceId:      deviceID,
 		Enrolled:      s.Identity.Enrolled(),
 		UptimeSeconds: uint64(time.Since(s.StartedAt).Seconds()),
-	}, nil
+	}
+	if s.Registry != nil {
+		if c := s.Registry.Core(); c.Degraded != "" {
+			resp.Core = &agentv1.CoreCondition{
+				Degraded: true, Reason: c.Degraded, Unavailable: c.Unavailable,
+			}
+		}
+	}
+	return resp, nil
 }
 
 // Modules implements ControlService.

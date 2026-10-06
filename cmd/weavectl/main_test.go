@@ -33,6 +33,7 @@ type fakeControl struct {
 	rollback *controlv1.RollbackRequest
 	surfaces *controlv1.SurfacesResponse
 	reload   *controlv1.ReloadResponse
+	core     *agentv1.CoreCondition
 	fail     bool
 }
 
@@ -52,7 +53,7 @@ func (f *fakeControl) Status(
 	}
 	return &controlv1.StatusResponse{
 		CoreVersion: "1.2.3", Protocol: &agentv1.ProtocolRange{Min: 1, Max: 2},
-		DeviceId: "dev-1", Enrolled: true, UptimeSeconds: 90,
+		DeviceId: "dev-1", Enrolled: true, UptimeSeconds: 90, Core: f.core,
 	}, nil
 }
 
@@ -182,6 +183,27 @@ func TestStatus(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("status output lacks %q:\n%s", want, out)
 		}
+	}
+}
+
+// A degraded core says so, with the reason and what is disabled; a whole one
+// prints no such lines.
+func TestStatusDegraded(t *testing.T) {
+	addr := serve(t, &fakeControl{core: &agentv1.CoreCondition{
+		Degraded: true, Reason: "store sealed elsewhere", Unavailable: []string{"store", "identity"},
+	}})
+	code, out, errOut := ctl("-socket", addr, "status")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	for _, want := range []string{"DEGRADED  store sealed elsewhere", "disabled  store, identity"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status output lacks %q:\n%s", want, out)
+		}
+	}
+	_, out, _ = ctl("-socket", serve(t, &fakeControl{}), "status")
+	if strings.Contains(out, "DEGRADED") {
+		t.Fatalf("a whole core printed degraded:\n%s", out)
 	}
 }
 

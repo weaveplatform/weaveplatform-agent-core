@@ -520,7 +520,8 @@ The model, for a module that runs as another identity — a `service` module dro
 user:
 
 - **Data is private.** Logs, staged artifacts, installed modules and core's own versions are
-  `0700` root; the store and its sealed key are `0600` files directly in `StateDir`. Search
+  `0700` root; the store, its sealed key and `manifest.sequence` are `0600` files directly
+  in `StateDir`. Search
   permission on `StateDir` lets another identity reach a path it already knows, never list
   the directory or read those files.
 - **The binary it runs is staged in `ExecDir/<id>/`**: a fresh root-owned `0555` copy in a
@@ -565,9 +566,9 @@ user:
 | `internal/store` | one bbolt file, bucket per namespace, AES-256-GCM per value (namespace+key as AAD), master key sealed by `keyprotect` (DPAPI / keyfile → Secure Enclave/TPM later) |
 | `internal/policy` | read the local policy file on change, cache the last good document in the store, wake Watch streams on change ([Policy](#policy)) |
 | `internal/identity` | Ed25519 device identity behind a Provider seam, local to the machine; per-module scoped credentials (fail closed today) |
-| `internal/transport` | the host channel peer, durable offline queue |
+| `internal/transport` | the host channel peer, inbound flow control, durable offline queue |
 | `internal/provision` | the channel trust anchor from a `WEAVEPROV` provisioning volume, only while none is installed ([Authentication](#authentication)) |
-| `internal/lifecycle` | staged install, health-gated promote, N-1 retention, rollback |
+| `internal/lifecycle` | staged install, health-gated promote, N-1 retention, rollback; the manifest anti-rollback mark ([The store and template seals](#the-store-and-template-seals)) |
 | `internal/manifestverify` | two-tier Ed25519 chain verification for channel manifests |
 | `internal/capability` | the one host probe at startup that gates module launch |
 | `internal/eventbus` | at-most-once in-core pub/sub — the only lateral channel between modules |
@@ -601,6 +602,79 @@ restored from a backup with a lower revision is applied rather than refused.
   a restart too.
 - **Unreadable file** (permissions) — retried every check, since the fix need not touch the
   file's modification time.
+
+## The store and template seals
+
+Core's encrypted store (`store.db`, with its master key sealed in `store.key`, both
+directly in `StateDir`) holds what is particular to one machine: the device identity
+(`core.identity`), the last good policy (`core.policy`), the offline queue
+(`core.transport`), each module's key/values, and a copy of the channel-manifest
+anti-rollback mark (`core.manifest`).
+
+**A template seal removes the store.** `weave seal`, in the guest CLIs, prepares a machine
+to be cloned. It deliberately deletes `store.key` and `store.db`, so each clone mints a
+fresh identity on first start rather than every clone sharing the template's. On Windows
+there is no choice anyway: DPAPI binds `store.key` to the machine it was sealed on (machine
+scope plus the `MachineGuid` as entropy), and a sysprepped clone can never unseal it.
+
+**The anti-rollback mark survives a seal.** The mark — the highest channel-manifest
+`sequence` core has accepted — is kept in two places: in the store, and in a plain file,
+`manifest.sequence`, in `StateDir`. A seal keeps the file, so a clone inherits the
+template's mark and refuses any older signed manifest; a mark kept only in the store would
+reset to zero on every clone. The number is not secret, so the file needs only the state
+directory's access control (root-only `0600` on Unix; on Windows it inherits `StateDir`'s
+SYSTEM and Administrators ACL), not encryption.
+
+- The effective mark is the larger of the two copies. A manifest below it is refused.
+- Every accept writes each copy that is below the new sequence, the file first (temp file,
+  fsync, rename, directory fsync, so a crash leaves the old value or the new one). An
+  accept that cannot record its sequence is refused. Neither copy is ever lowered.
+- A missing file is 0: a fresh machine, or one upgraded from a core that kept only the
+  store copy. The first accept writes it.
+- A file that is there but does not hold a number, or a store copy that cannot be read,
+  refuses every manifest with an ERROR. It is never read as 0, which would reopen the
+  replay window the mark exists to close.
+
+What a seal must remove and keep, per OS:
+
+| | Linux | macOS | Windows |
+|---|---|---|---|
+| `StateDir` | `/var/lib/weave` | `/Library/Application Support/Weave` | `%ProgramData%\Weave` |
+| **remove** | `store.key`, `store.db` | `store.key`, `store.db` | `store.key`, `store.db` |
+| **remove** | the channel key, `/etc/weave/channel.pub` | the channel key, `/etc/weave/channel.pub` | the channel key, `%ProgramData%\weave\channel.pub` |
+| **keep** | `manifest.sequence` | `manifest.sequence` | `manifest.sequence` |
+| **keep** | `core/`, `modules/`, `policy.json` | the same | the same |
+
+On Linux and macOS `store.key` is a root-only file rather than a sealed blob, so a clone
+*could* open the template's store; it is removed for the identity's sake, not because it
+would fail. The channel key is removed so each clone is given its own by its host
+([Authentication](#authentication)).
+
+### A store core cannot open: degraded, not down
+
+When the store cannot be opened — the master key does not unseal, or it opens but the
+identity in it does not decrypt (a `store.db` kept beside a new `store.key`) — core does
+not exit, and does not delete, move or reset the store either. It starts **degraded**:
+
+| Runs | Disabled, with a clear error |
+|---|---|
+| the host channel and its authentication, the control socket, every module, module reload, the policy file | `StoreService` (`Unavailable`), `IdentityService.WhoAmI` (`Unavailable`), `queue_offline` sends while no host is connected (an error, not "queued"), the policy cache, channel installs (manifests refused) |
+
+Manifest acceptance stays refused: the file mark alone is not accepted against, because
+the store's copy may be the higher one. Core logs one ERROR at start, and again every ten
+minutes, naming the likely cause — the store was sealed under a different machine or user
+identity, typically a clone or sysprep without `weave seal` — and the fix: **stop the
+service, delete `store.key` and `store.db` from `StateDir` (keep `manifest.sequence`), and
+start it again**; core then creates a new store and a new identity. The condition is in
+`weavectl status` (`DEGRADED` and what is disabled), `ControlService.Status`
+(`core`), `RegistryService` (`core`) and the host channel's `modules.list` /
+`modules.changed` snapshot (`core`, [`PROTOCOL.md`](PROTOCOL.md#moduleslist-moduleschanged)).
+
+Exiting was the old answer, and on a Windows clone it was a crash loop with no way in.
+Repairing automatically would throw away an identity and an offline queue on what might be
+a transient fault, and would hide that the image was cloned unsealed. The one exception is
+a store locked by another running core: that is a second instance, not a broken store, and
+core still refuses to start beside it.
 
 ## The test that matters
 
@@ -729,9 +803,23 @@ independently, so it needed no change. Not yet exercised: the overlapped device 
 vioserial port (the fix is built from the field traces, not yet run against them), and
 `\\.\COM2`, whose default comm timeouts are left as they were.
 
-Core still drops an inbound frame when the addressed module's 64-message queue is full,
-and answers `busy` (PROTOCOL.md); the drain means a burst of those can slow the
-decoder without backing the device up behind it.
+A module slower than the host does not lose frames. Each `Receive` stream has a
+64-message queue; when it is full the read loop **waits** for room rather than dropping
+the frame, so it stops reading, the device (or socket) backs up, and the host's writes
+block: flow control all the way to the sender. A 20 MB `weave.exec.stdin` over Windows
+virtio-serial used to log hundreds of "receiver slow; message dropped" and depend on the
+client resending; it now streams at the module's pace.
+
+The wait is bounded (5 s per frame, one deadline however many streams the module has
+open), because the same loop carries every other frame the host sends, control frames
+included. A receiver that is stuck rather than slow — a module blocked writing output to a
+host that is itself blocked writing input to us — would otherwise hold the channel for
+good. After the bound the frame is answered `busy` (PROTOCOL.md) and the loop moves on.
+Replies are not starved meanwhile: they are written under the write lock from whichever
+goroutine has one, never by the read loop's own progress. A stream that ends while a frame
+waits on it releases the wait at once. The stall watch is held during the wait: the
+decoder may already hold the start of the next frame, and silence from the wire while the
+loop is not reading it is not a lost byte.
 
 ### Socket channels
 

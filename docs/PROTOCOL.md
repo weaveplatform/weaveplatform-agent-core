@@ -226,6 +226,26 @@ It is never launched; it changes when the directory is fixed or removed.
 A host should treat an unknown `state` or `health.status` as not running / unknown rather
 than failing: the vocabulary may grow.
 
+While core itself runs degraded, the snapshot also carries `core`; while it is whole the
+field is absent. Additive, so it does not move the protocol integer: a host that does not
+know it ignores it.
+
+```json
+{"revision": 3, "modules": [], "core": {
+  "degraded": true,
+  "reason": "core is running degraded: its encrypted store cannot be used (…). Likely cause: … Fix: …",
+  "unavailable": ["store", "identity", "policy-cache", "offline-queue", "channel-installs"]}}
+```
+
+| Field | |
+|---|---|
+| `core.degraded` | always `true` when `core` is present |
+| `core.reason` | what is wrong, its likely cause and the operator's fix, for display as is |
+| `core.unavailable` | what core is running without; always an array; a name a host does not know is still unavailable |
+
+The commonest cause is a clone made without `weave seal`
+([architecture.md](architecture.md#the-store-and-template-seals)).
+
 ### `delivery.failed`
 
 Sent in place of silence when core cannot hand an authenticated host's frame to a module, so
@@ -244,7 +264,7 @@ The envelope is `{"module": "hvchannel", "kind": "delivery.failed", "id": <the f
 |---|---|---|
 | `not_installed` | no module answers to `module` | fail the call; feature-gate |
 | `not_running` | a module answers to it but has no receiver open; `state` (always set) and `detail` say why — `running` here means it is up but has not opened its receive stream yet | fail the call, or wait for a `modules.changed` showing it running and retry |
-| `busy` | the module's inbound queue (64 messages) is full | retry with backoff |
+| `busy` | the module's inbound queue (64 messages) stayed full for 5 s while core waited for room | retry with backoff |
 
 A frame core cannot read at all — the stream lost bytes, so the length prefix is garbage or
 the frame never completes — ends the connection rather than the message: core resets the
@@ -256,6 +276,11 @@ Before authentication nothing changes: a gated op is refused with `auth.result`,
 for a module that is not there goes unanswered, because which modules a guest has is more than
 the pre-auth exemption is meant to disclose. A frame core does deliver gets no acknowledgement
 from core; the module's own reply is the acknowledgement.
+
+Core does not drop a frame because its module is slow. While the module's queue is full the
+read loop waits, reads nothing more, and the host's writes back up behind it: a host
+streaming to a module is flow-controlled to that module's pace. `busy` comes only after
+the bounded wait, from a module that is stuck rather than slow.
 
 ## Registry
 

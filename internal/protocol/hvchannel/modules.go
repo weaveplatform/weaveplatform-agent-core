@@ -27,6 +27,19 @@ const (
 type ModulesSnapshot struct {
 	Revision uint64       `json:"revision"`
 	Modules  []ModuleInfo `json:"modules"`
+	// Core is present only while core itself runs degraded. Additive: a host
+	// that does not know the field ignores it.
+	Core *CoreCondition `json:"core,omitempty"`
+}
+
+// CoreCondition says what core is running without, and why.
+type CoreCondition struct {
+	Degraded bool `json:"degraded"`
+	// Reason is what is wrong, its likely cause and the operator's fix.
+	Reason string `json:"reason"`
+	// Unavailable names the features core is running without; always an
+	// array.
+	Unavailable []string `json:"unavailable"`
 }
 
 // ModuleInfo is one installed module as a host sees it.

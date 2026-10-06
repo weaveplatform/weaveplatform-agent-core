@@ -17,6 +17,11 @@ func snapshot(reg *registry.Registry) hvchannel.ModulesSnapshot {
 	}
 	rev, mods := reg.List()
 	out.Revision = rev
+	if c := reg.Core(); c.Degraded != "" {
+		out.Core = &hvchannel.CoreCondition{
+			Degraded: true, Reason: c.Degraded, Unavailable: append([]string{}, c.Unavailable...),
+		}
+	}
 	for _, m := range mods {
 		caps := m.Capabilities
 		if caps == nil {

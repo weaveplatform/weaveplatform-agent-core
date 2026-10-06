@@ -114,6 +114,7 @@ type TransportBackend interface {
 // implements it.
 type RegistryBackend interface {
 	List() (revision uint64, modules []registry.Module)
+	Core() registry.Core
 	Watch(ctx context.Context) <-chan struct{}
 }
 
@@ -353,6 +354,14 @@ func (v *identityServer) WhoAmI(
 	ctx context.Context,
 	_ *agentv1.WhoAmIRequest,
 ) (*agentv1.DeviceIdentity, error) {
+	// An identity core could not load is refused rather than answered with
+	// an empty one: a module told "ephemeral, no id" might act on that.
+	if u, ok := v.s.Identity.(interface{ Unavailable() error }); ok {
+		if err := u.Unavailable(); err != nil {
+			//nolint:wrapcheck // a gRPC status is the handler's contract
+			return nil, status.Error(codes.Unavailable, err.Error())
+		}
+	}
 	id, eph, tenant := v.s.Identity.WhoAmI(ctx)
 	return &agentv1.DeviceIdentity{DeviceId: id, Ephemeral: eph, Tenant: tenant}, nil
 }

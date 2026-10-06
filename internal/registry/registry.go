@@ -77,9 +77,21 @@ type Module struct {
 	Surfaces []*agentv1.Surface
 }
 
+// Core is core's own condition, reported beside the modules: a host or an
+// operator reading which modules are up also needs to know when core itself
+// is running without part of what it provides. The zero value is whole.
+type Core struct {
+	// Degraded is the reason — what is wrong, the likely cause and the fix —
+	// or empty while core is whole.
+	Degraded string
+	// Unavailable names the features core is running without.
+	Unavailable []string
+}
+
 // Registry is safe for concurrent use. The zero value is ready.
 type Registry struct {
 	mu       sync.Mutex
+	core     Core
 	modules  map[string]Module
 	revision uint64
 	watchers map[chan struct{}]struct{}
@@ -104,6 +116,24 @@ func (r *Registry) Set(m Module) {
 		return
 	}
 	r.bumpLocked()
+}
+
+// SetCore records core's own condition, waking watchers when it changed.
+func (r *Registry) SetCore(c Core) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if c.Degraded == r.core.Degraded && slices.Equal(c.Unavailable, r.core.Unavailable) {
+		return
+	}
+	r.core = Core{Degraded: c.Degraded, Unavailable: slices.Clone(c.Unavailable)}
+	r.bumpLocked()
+}
+
+// Core returns core's own condition.
+func (r *Registry) Core() Core {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return Core{Degraded: r.core.Degraded, Unavailable: slices.Clone(r.core.Unavailable)}
 }
 
 // Remove drops the entry for id. No-op for unknown ids.

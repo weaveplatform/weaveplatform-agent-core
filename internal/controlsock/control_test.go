@@ -171,7 +171,7 @@ func TestControlReadPaths(t *testing.T) {
 	if st.GetCoreVersion() != version.Version || st.GetDeviceId() != "test-device" ||
 		st.GetEnrolled() ||
 		st.GetProtocol().GetMin() != 1 ||
-		st.GetProtocol().GetMax() != 1 {
+		st.GetProtocol().GetMax() != 1 || st.GetCore() != nil {
 		t.Fatalf("Status = %v", st)
 	}
 

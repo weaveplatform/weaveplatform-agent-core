@@ -654,3 +654,27 @@ func TestNewServerRoutesTransportUnderChannelAddress(t *testing.T) {
 		t.Fatalf("sent as %v, want the channel address", ft.got)
 	}
 }
+
+type disabledIdentity struct{ fakeIdentity }
+
+func (disabledIdentity) Unavailable() error { return errors.New("store sealed elsewhere") }
+
+// An identity core could not load is refused, not served as an empty one.
+func TestIdentityServerUnavailable(t *testing.T) {
+	v := &identityServer{s: &Services{Identity: disabledIdentity{}}, module: "m"}
+	if _, err := v.WhoAmI(context.Background(), &agentv1.WhoAmIRequest{}); status.Code(err) != codes.Unavailable ||
+		!strings.Contains(err.Error(), "sealed elsewhere") {
+		t.Fatalf("WhoAmI = %v", err)
+	}
+}
+
+type availableIdentity struct{ fakeIdentity }
+
+func (availableIdentity) Unavailable() error { return nil }
+
+func TestIdentityServerAvailable(t *testing.T) {
+	v := &identityServer{s: &Services{Identity: availableIdentity{}}, module: "m"}
+	if id, err := v.WhoAmI(context.Background(), &agentv1.WhoAmIRequest{}); err != nil || id.GetDeviceId() != "dev-1" {
+		t.Fatalf("WhoAmI = %v, %v", id, err)
+	}
+}

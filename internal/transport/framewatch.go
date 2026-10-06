@@ -35,6 +35,10 @@ type frameWatch struct {
 	declared uint64 // the frame in progress's length
 	last     time.Time
 	total    uint64
+	// held is set while the read loop is waiting on something other than the
+	// wire (a full receiver): bytes the decoder has buffered ahead are not
+	// read from here meanwhile, so silence then says nothing about the wire.
+	held bool
 }
 
 func newFrameWatch(r io.Reader) *frameWatch {
@@ -77,6 +81,21 @@ func (w *frameWatch) advance(b []byte) {
 	}
 }
 
+// hold stops the stall clock while the read loop is busy elsewhere; release
+// restarts it from now.
+func (w *frameWatch) hold() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.held = true
+}
+
+func (w *frameWatch) release() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.held = false
+	w.last = time.Now()
+}
+
 // stalled reports a frame in progress that has had no byte for longer than
 // limit, with how far it got for the log.
 func (w *frameWatch) stalled(limit time.Duration) (bool, stallInfo) {
@@ -91,7 +110,7 @@ func (w *frameWatch) stalled(limit time.Duration) (bool, stallInfo) {
 	if w.hdrHave < len(w.hdr) {
 		info.declared, info.missing = 0, uint64(len(w.hdr)-w.hdrHave)
 	}
-	return w.hdrHave > 0 && info.idle >= limit, info
+	return !w.held && w.hdrHave > 0 && info.idle >= limit, info
 }
 
 type stallInfo struct {

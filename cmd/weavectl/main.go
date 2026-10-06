@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -89,6 +90,12 @@ func run(argv []string, stdout, stderr io.Writer) int {
 			"uptime    %s\n",
 			(time.Duration(st.GetUptimeSeconds()) * time.Second).String(),
 		)
+		if c := st.GetCore(); c.GetDegraded() {
+			fmt.Fprintf(stdout, "DEGRADED  %s\n", c.GetReason())
+			if len(c.GetUnavailable()) > 0 {
+				fmt.Fprintf(stdout, "disabled  %s\n", strings.Join(c.GetUnavailable(), ", "))
+			}
+		}
 
 	case "modules":
 		resp, err := client.Modules(ctx, &controlv1.ModulesRequest{})

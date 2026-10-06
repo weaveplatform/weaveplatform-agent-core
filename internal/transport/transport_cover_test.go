@@ -148,18 +148,20 @@ func TestSendToFailingPeerWithoutQueueing(t *testing.T) {
 }
 
 func TestEnqueueStoreFailures(t *testing.T) {
+	// A message that cannot be queued is reported to the sender, not
+	// passed off as "queued, not yet delivered".
 	t.Run("put fails", func(t *testing.T) {
 		q := &flakyStore{StoreBackend: hostserv.NewMemStore(), failPut: true}
 		m := &Mux{Log: quietLog(), Queue: q}
-		if _, err := m.Send(
+		if ok, err := m.Send(
 			context.Background(),
 			"mod",
 			agentv1.Peer_PEER_HYPERVISOR,
 			"k",
 			nil,
 			true,
-		); err != nil {
-			t.Fatal(err)
+		); ok || err == nil || !strings.Contains(err.Error(), "could not be queued") {
+			t.Fatalf("Send = %v, %v", ok, err)
 		}
 		if len(queued(t, q.StoreBackend)) != 0 {
 			t.Fatal("message queued though Put failed")
@@ -299,18 +301,5 @@ func TestFlushStopsWhenPeerFails(t *testing.T) {
 	}
 	if n := len(queued(t, q)); n != 2 {
 		t.Fatalf("%d still queued, want 2", n)
-	}
-}
-
-func TestDeliverToSlowReceiverDoesNotBlock(t *testing.T) {
-	m := &Mux{Log: quietLog()}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	in := m.Receive(ctx, "mod")
-	for range inboundBuffer + 5 {
-		m.deliver("mod", "k", nil)
-	}
-	if len(in) != inboundBuffer {
-		t.Fatalf("buffered %d, want %d", len(in), inboundBuffer)
 	}
 }

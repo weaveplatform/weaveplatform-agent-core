@@ -198,3 +198,22 @@ func TestInitReplacesCorruptState(t *testing.T) {
 		})
 	}
 }
+
+// A disabled provider serves no identity and says why, even after one was
+// loaded: nothing from a store core has stopped trusting is handed out.
+func TestDisable(t *testing.T) {
+	p := &Provider{Log: testLog(), Store: hostserv.NewMemStore()}
+	if err := p.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if p.Unavailable() != nil {
+		t.Fatal("a loaded identity reported unavailable")
+	}
+	p.Disable(errInjected)
+	if !errors.Is(p.Unavailable(), errInjected) || p.Enrolled() {
+		t.Fatalf("Unavailable = %v, enrolled %v", p.Unavailable(), p.Enrolled())
+	}
+	if id, _, _ := p.WhoAmI(context.Background()); id != "" {
+		t.Fatalf("disabled identity answered %q", id)
+	}
+}
