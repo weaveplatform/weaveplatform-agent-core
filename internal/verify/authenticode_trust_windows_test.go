@@ -97,8 +97,19 @@ func TestAuthenticodeAcceptsATrustedSelfSignedModule(t *testing.T) {
 		}
 		t.Fatal(err)
 	}
-	if err := authenticodeVerify(bin, m); err != nil {
-		t.Fatalf("a trusted self-signed module refused: %v", err)
+	// CryptoAPI observes root-store changes asynchronously. This process has
+	// already cached the untrusted chain above; give the temporary test trust
+	// a bounded opportunity to propagate before exercising the pin and hash.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		err := authenticodeVerify(bin, m)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, errWinVerifyTrust) || time.Now().After(deadline) {
+			t.Fatalf("a trusted self-signed module refused after trust propagation: %v", err)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 	if err := authenticodeVerify(
 		bin,

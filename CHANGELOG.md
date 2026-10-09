@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.12](https://github.com/weaveplatform/weaveplatform-agent-core/compare/v0.9.11...v0.9.12) (2026-10-09)
+
+
+### Bug Fixes
+
+* honor explicit HvSocket configuration in HCS guests ([#32](https://github.com/weaveplatform/weaveplatform-agent-core/issues/32)) ([175a22f](https://github.com/weaveplatform/weaveplatform-agent-core/commit/175a22fa3f3e7d0311dcf00b3d79d8b2ffbc34e7))
+
 ## [0.9.11](https://github.com/weaveplatform/weaveplatform-agent-core/compare/v0.9.10...v0.9.11) (2026-10-06)
 
 
