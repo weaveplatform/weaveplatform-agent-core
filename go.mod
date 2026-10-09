@@ -3,7 +3,7 @@ module github.com/weaveplatform/weaveplatform-agent-core
 go 1.27.2
 
 require (
-	github.com/Microsoft/go-winio v0.6.2
+	github.com/Microsoft/go-winio v0.6.3
 	github.com/deploymenttheory/go-bindings-macosplatform v0.20.1
 	github.com/deploymenttheory/go-bindings-win32 v0.5.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
