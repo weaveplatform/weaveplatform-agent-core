@@ -31,7 +31,7 @@ func TestWindowsProbeClaimsWhenTheGuestKeyExists(t *testing.T) {
 
 func TestWindowsProbeAbsentKeyNoCapability(t *testing.T) {
 	useGuestKey(t, absentKey)
-	for _, ch := range []Channel{{Kind: ChannelAuto}, {Kind: ChannelHvSocket, Port: 2010}, {Kind: ChannelNone}} {
+	for _, ch := range []Channel{{Kind: ChannelAuto}, {Kind: ChannelNone}} {
 		set := Set{}
 		probeOS(set, ch)
 		if _, ok := set["hypervisor.channel"]; ok {
@@ -41,7 +41,7 @@ func TestWindowsProbeAbsentKeyNoCapability(t *testing.T) {
 }
 
 func TestWindowsProbeConfiguredHvSocket(t *testing.T) {
-	useGuestKey(t, presentKey)
+	useGuestKey(t, absentKey)
 	set := Set{}
 	probeOS(set, Channel{Kind: ChannelHvSocket, Port: 2010})
 	if got := set["hypervisor.channel"]; got["kind"] != "hvsocket" || got["port"] != "2010" {

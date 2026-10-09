@@ -30,9 +30,8 @@ func probeOS(set Set, ch Channel) {
 			set["hypervisor.channel"] = map[string]string{"kind": ChannelHvSocket}
 		}
 	case ChannelHvSocket:
-		if hyperVGuest() {
-			set["hypervisor.channel"] = ch.socketAttrs()
-		}
+		// Explicit configuration supports HCS guests without a Hyper-V registry marker.
+		set["hypervisor.channel"] = ch.socketAttrs()
 	case ChannelVirtioSerial:
 		// Opening is the probe: \\.\ device names do not answer os.Stat.
 		for _, dev := range channelDevices {
